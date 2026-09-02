@@ -6,6 +6,7 @@ import { randomUUID } from 'node:crypto';
 import { inflateRawSync } from 'node:zlib';
 import { basename, dirname, extname, join, normalize, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import pg from 'pg';
 
 const PORT = Number(process.env.PORT || 4173);
 const TARGET_ITEM_COUNT = 112;
@@ -20,6 +21,83 @@ const MIME = { '.html': 'text/html; charset=utf-8', '.css': 'text/css; charset=u
 const execFileAsync = promisify(execFile);
 const selectedFolders = new Map();
 const runningOperations = new Map();
+const { Pool } = pg;
+const databaseUrl = process.env.DATABASE_URL || '';
+const pool = databaseUrl ? new Pool({ connectionString: databaseUrl, max: 8, idleTimeoutMillis: 30_000, connectionTimeoutMillis: 10_000 }) : null;
+const databaseState = { enabled: Boolean(pool), connected: false, error: '' };
+
+async function initializeDatabase() {
+  if (!pool) return;
+  try {
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS catalog_cache (
+        cache_key text PRIMARY KEY,
+        payload jsonb NOT NULL,
+        fetched_at timestamptz NOT NULL DEFAULT now()
+      );
+      CREATE TABLE IF NOT EXISTS download_events (
+        id bigserial PRIMARY KEY,
+        created_at timestamptz NOT NULL DEFAULT now(),
+        item_count integer NOT NULL,
+        school_code text,
+        user_code text,
+        purpose_code text,
+        status text NOT NULL,
+        error_message text
+      );
+    `);
+    databaseState.connected = true;
+    databaseState.error = '';
+    console.log('PostgreSQL 연결 및 테이블 준비 완료');
+  } catch (error) {
+    databaseState.connected = false;
+    databaseState.error = error.message;
+    console.error('PostgreSQL 초기화 실패:', error.message);
+  }
+}
+
+const databaseReady = initializeDatabase();
+
+async function cachedCatalog(schoolCodes) {
+  const cacheKey = [...schoolCodes].sort().join(',');
+  if (pool) {
+    await databaseReady;
+    if (databaseState.connected) {
+      try {
+        const cached = await pool.query('SELECT payload FROM catalog_cache WHERE cache_key = $1 AND fetched_at > now() - interval \'30 minutes\'', [cacheKey]);
+        if (cached.rowCount) return cached.rows[0].payload;
+      } catch (error) {
+        databaseState.connected = false;
+        databaseState.error = error.message;
+        console.error('PostgreSQL 캐시 조회 실패:', error.message);
+      }
+    }
+  }
+  const items = await fetchCatalog(schoolCodes);
+  if (pool) {
+    try {
+      await pool.query(`INSERT INTO catalog_cache (cache_key, payload, fetched_at) VALUES ($1, $2::jsonb, now()) ON CONFLICT (cache_key) DO UPDATE SET payload = EXCLUDED.payload, fetched_at = now()`, [cacheKey, JSON.stringify(items)]);
+      databaseState.connected = true;
+      databaseState.error = '';
+    } catch (error) {
+      databaseState.error = error.message;
+      console.error('PostgreSQL 캐시 저장 실패:', error.message);
+    }
+  }
+  return items;
+}
+
+async function recordDownload(items, meta, status, errorMessage = null) {
+  if (!pool) return;
+  try {
+    await databaseReady;
+    await pool.query('INSERT INTO download_events (item_count, school_code, user_code, purpose_code, status, error_message) VALUES ($1, $2, $3, $4, $5, $6)', [items.length, items[0]?.schoolCode || null, meta.userCode || null, meta.purposeCode || null, status, errorMessage]);
+    databaseState.connected = true;
+  } catch (error) {
+    databaseState.error = error.message;
+    console.error('PostgreSQL 다운로드 이력 저장 실패:', error.message);
+  }
+}
 
 function runPowerShell(command, operationId) {
   return new Promise((resolvePromise, rejectPromise) => {
@@ -311,14 +389,25 @@ const server = http.createServer(async (req, res) => {
       return res.end();
     }
     const url = new URL(req.url, `http://${req.headers.host}`);
+    if (req.method === 'GET' && url.pathname === '/api/health') {
+      await databaseReady;
+      return json(res, 200, { ok: true, database: { enabled: databaseState.enabled, connected: databaseState.connected, error: databaseState.error || null } });
+    }
     if (req.method === 'GET' && url.pathname === '/api/catalog') {
       const requested = (url.searchParams.get('schools') || '01,02,03,04').split(',').filter((x) => SCHOOL_TYPES[x]);
-      const items = await fetchCatalog(requested);
+      const items = await cachedCatalog(requested);
       return json(res, 200, { items, fetchedAt: new Date().toISOString() });
     }
     if (req.method === 'POST' && url.pathname === '/api/download') {
       const body = await readJson(req);
-      const file = await createDownload(body.items, body.meta || {});
+      let file;
+      try {
+        file = await createDownload(body.items, body.meta || {});
+        await recordDownload(body.items || [], body.meta || {}, 'success');
+      } catch (error) {
+        await recordDownload(body.items || [], body.meta || {}, 'failed', error.message);
+        throw error;
+      }
       res.writeHead(200, { 'content-type': file.contentType, 'content-disposition': file.disposition, 'content-length': file.bytes.length });
       return res.end(file.bytes);
     }
@@ -398,7 +487,14 @@ const server = http.createServer(async (req, res) => {
       if (!folderState) return json(res, 400, { error: '저장 폴더를 다시 선택해 주세요.' });
       const batchKey = String(body.batchKey || '');
       if (batchKey && folderState.completed.has(batchKey)) return json(res, 200, { ...folderState.completed.get(batchKey), repeated: true });
-      const file = await createDownload(body.items, body.meta || {});
+      let file;
+      try {
+        file = await createDownload(body.items, body.meta || {});
+        await recordDownload(body.items || [], body.meta || {}, 'success');
+      } catch (error) {
+        await recordDownload(body.items || [], body.meta || {}, 'failed', error.message);
+        throw error;
+      }
       const saved = await saveZipToFolder(file.bytes, folderState);
       const result = { count: saved.length, files: saved.map((path) => path.slice(folderState.path.length + 1)) };
       if (batchKey) folderState.completed.set(batchKey, result);

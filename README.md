@@ -41,3 +41,13 @@ ZIP을 남기지 않으려면 먼저 **저장 폴더 선택**을 누르고 폴�
 대시보드에는 핵심 지표 타일, 학교종류·검색 필터, 상위 항목 비교 차트, 숫자 지표 구성 차트와 상세 데이터 표가 포함됩니다.
 
 브라우저가 여러 파일 다운로드 권한을 물으면 허용해야 모든 ZIP 묶음을 저장할 수 있습니다. 대학알리미의 화면/API가 변경되거나 서비스가 점검 중이면 조회·다운로드가 일시적으로 실패할 수 있습니다.
+
+## Railway PostgreSQL
+
+Railway 프로젝트에 PostgreSQL 서비스를 추가한 뒤 앱 서비스의 `DATABASE_URL` 변수에 `${{Postgres.DATABASE_URL}}` 참조를 연결합니다. 다음 배포부터 서버가 `catalog_cache`와 `download_events` 테이블을 자동으로 생성합니다.
+
+- `catalog_cache`: 학교 종류별 공시 항목 목록을 30분간 캐시합니다.
+- `download_events`: 다운로드 성공·실패, 항목 수와 요청 구분을 기록합니다.
+- `GET /api/health`: PostgreSQL 활성화 및 연결 상태를 반환합니다.
+
+`DATABASE_URL`이 없는 로컬 환경에서는 PostgreSQL 기능만 비활성화되고 기존 다운로드 기능은 그대로 동작합니다.

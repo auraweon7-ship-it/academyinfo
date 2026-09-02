@@ -231,7 +231,7 @@ async function scan() {
   $('#formError').textContent = '';
   if (!schools.length) { $('#formError').textContent = '학교 종류를 하나 이상 선택해 주세요.'; return false; }
   if (!$('#detail').value.trim()) { $('#formError').textContent = '상세 내용을 입력해 주세요.'; return false; }
-  if (location.protocol === 'https:' && !state.settings.apiServerUrl) {
+  if (location.hostname.endsWith('github.io') && !state.settings.apiServerUrl) {
     const message = 'GitHub Pages에서 다운로드하려면 설정에 별도로 배포한 API 서버 주소가 필요합니다.';
     $('#formError').textContent = message;
     $('#dockStatus').textContent = 'API 서버 설정 필요';
