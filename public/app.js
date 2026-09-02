@@ -504,9 +504,22 @@ async function startCleaning() {
     if (state.cleanDirectoryHandle) {
       const files=[]; for await (const entry of state.cleanDirectoryHandle.values()) if(entry.kind==='file' && /\.xlsx$/i.test(entry.name) && !entry.name.startsWith('~$')) files.push(entry);
       if(!files.length) throw new Error('선택한 폴더에 Excel 파일이 없습니다.');
-      const output=await state.cleanDirectoryHandle.getDirectoryHandle('정제',{create:true}); const made=[];
-      for(let index=0;index<files.length;index++) { const file=await files[index].getFile(); setCleanStatus('running',`웹 정제 ${index+1} / ${files.length}`,file.name); const response=await requestApi('/api/web/clean',{method:'POST',headers:{'content-type':'application/octet-stream','x-file-name':encodeURIComponent(file.name)},body:file,signal:state.cleanController.signal}); if(!response.ok) throw new Error((await readApiJson(response)).error); const name=decodeURIComponent(response.headers.get('x-output-name')||`${file.name}_정제.xlsx`); const target=await output.getFileHandle(name,{create:true}); const writable=await target.createWritable(); await writable.write(await response.blob()); await writable.close(); made.push(name); }
-      renderCleanResults({success:made.length,failed:0,total:made.length,output:`${state.cleanDirectoryHandle.name}/정제`,files:made.map(file=>({file,status:'success',before:0,after:0,merged:0}))}); setCleanStatus('success',`${made.length}개 파일 정제 완료`,'정제 폴더에 저장했습니다.'); return;
+      const output=await state.cleanDirectoryHandle.getDirectoryHandle('정제',{create:true}); const results=[];
+      for(let index=0;index<files.length;index++) {
+        const file=await files[index].getFile(); setCleanStatus('running',`웹 정제 ${index+1} / ${files.length}`,file.name);
+        if(!file.size){results.push({file:file.name,status:'failed',error:'0바이트 파일 — 1단계에서 다시 다운로드 필요'});continue;}
+        try {
+          const response=await requestApi('/api/web/clean',{method:'POST',headers:{'content-type':'application/octet-stream','x-file-name':encodeURIComponent(file.name)},body:file,signal:state.cleanController.signal});
+          if(!response.ok) throw new Error((await readApiJson(response)).error);
+          const name=decodeURIComponent(response.headers.get('x-output-name')||`${file.name}_정제.xlsx`); const target=await output.getFileHandle(name,{create:true}); let writable;
+          try { writable=await target.createWritable({keepExistingData:false}); await writable.write(await response.blob()); await writable.close(); }
+          catch(error){if(writable)await writable.abort().catch(()=>{});throw error;}
+          results.push({file:name,status:'success',before:0,after:0,merged:0});
+        } catch(error) { if(error.name==='AbortError')throw error; results.push({file:file.name,status:'failed',error:error.message||'정제 실패'}); }
+      }
+      const success=results.filter(item=>item.status==='success').length,failed=results.length-success;
+      renderCleanResults({success,failed,total:results.length,output:`${state.cleanDirectoryHandle.name}/정제`,files:results});
+      setCleanStatus(success?'success':'error',success?`${success}개 파일 정제 완료`:'정제 가능한 파일이 없습니다.',failed?`${failed}개 손상·미완료 파일은 건너뛰었습니다.`:'정제 폴더에 저장했습니다.'); return;
     }
     const response = await requestApi('/api/clean-folder', {
       method: 'POST', headers: { 'content-type': 'application/json' },

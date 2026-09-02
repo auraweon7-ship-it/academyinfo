@@ -434,6 +434,13 @@ async function readBytes(req, limit = 80 * 1024 * 1024) {
   return Buffer.concat(chunks);
 }
 
+function validateXlsx(bytes, fileName) {
+  if (!bytes.length) throw new Error(`${fileName}: 파일 크기가 0바이트입니다. 1단계에서 다시 다운로드해 주세요.`);
+  if (bytes.length < 4 || bytes[0] !== 0x50 || bytes[1] !== 0x4b) {
+    throw new Error(`${fileName}: 정상적인 XLSX 파일이 아닙니다. 확장자만 XLSX이거나 다운로드가 완료되지 않은 파일입니다.`);
+  }
+}
+
 const server = http.createServer(async (req, res) => {
   try {
     res.setHeader('access-control-allow-origin', '*');
@@ -452,10 +459,11 @@ const server = http.createServer(async (req, res) => {
     if (req.method === 'POST' && url.pathname === '/api/web/clean') {
       const fileName = decodeURIComponent(String(req.headers['x-file-name'] || 'source.xlsx'));
       const source = await readBytes(req);
+      validateXlsx(source, fileName);
       const id = randomUUID();
       const originalKey = `original/${id}/${fileName}`;
-      await persistStoredFile(id, 'original', fileName, originalKey, source, 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
       const result = await cleanWorkbook(source, fileName);
+      await persistStoredFile(id, 'original', fileName, originalKey, source, 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
       const cleanKey = `clean/${id}/${result.name}`;
       await persistStoredFile(randomUUID(), 'clean', result.name, cleanKey, result.bytes, 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
       res.writeHead(200, { 'content-type':'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', 'x-output-name':encodeURIComponent(result.name), 'content-length':result.bytes.length });
@@ -463,7 +471,7 @@ const server = http.createServer(async (req, res) => {
     }
     if (req.method === 'POST' && url.pathname === '/api/web/dashboard') {
       const fileName = decodeURIComponent(String(req.headers['x-file-name'] || 'clean.xlsx'));
-      const source = await readBytes(req); const id = randomUUID();
+      const source = await readBytes(req); validateXlsx(source, fileName); const id = randomUUID();
       const result = await dashboardFromWorkbook(source, fileName);
       const dashboardKey = `dashboard/${id}/${result.name}`;
       await persistStoredFile(id, 'dashboard', result.name, dashboardKey, result.bytes, 'text/html; charset=utf-8');

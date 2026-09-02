@@ -13,9 +13,16 @@ const graduationYear = (value) => {
   return /^20\d{4}$/.test(digits) ? `${digits.slice(0,4)}.${digits.slice(4)}` : value;
 };
 
-export async function cleanWorkbook(bytes, fileName) {
+async function loadXlsx(bytes, fileName) {
   const workbook = new ExcelJS.Workbook();
-  await workbook.xlsx.load(bytes);
+  try { await workbook.xlsx.load(bytes); }
+  catch { throw new Error(`${fileName}: 파일 내용이 손상되었거나 다운로드가 완료되지 않았습니다. 1단계에서 해당 파일을 다시 다운로드해 주세요.`); }
+  if (!workbook.worksheets.length) throw new Error(`${fileName}: 처리할 워크시트가 없습니다.`);
+  return workbook;
+}
+
+export async function cleanWorkbook(bytes, fileName) {
+  const workbook = await loadXlsx(bytes, fileName);
   for (const sheet of workbook.worksheets) {
     let headerRow = 1;
     for (let row = 1; row <= Math.min(10, sheet.rowCount); row++) {
@@ -57,7 +64,7 @@ export async function cleanWorkbook(bytes, fileName) {
 }
 
 export async function dashboardFromWorkbook(bytes, fileName) {
-  const workbook = new ExcelJS.Workbook(); await workbook.xlsx.load(bytes);
+  const workbook = await loadXlsx(bytes, fileName);
   const sheet = workbook.worksheets[0];
   const rows = [];
   sheet.eachRow((row) => rows.push(row.values.slice(1).map(valueOf)));
