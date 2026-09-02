@@ -193,8 +193,6 @@ async function extractZip(blob) {
 async function writeEntry(root, entry, usedNames) {
   const safeParts = entry.name.replaceAll('\\', '/').split('/').filter((part) => part && part !== '.' && part !== '..').map((part) => part.replace(/[<>:"|?*]/g, '_'));
   if (!safeParts.length) return;
-  let directory = root;
-  for (const part of safeParts.slice(0, -1)) directory = await directory.getDirectoryHandle(part, { create: true });
   let fileName = safeParts.at(-1);
   const key = safeParts.join('/').toLowerCase();
   const duplicate = usedNames.get(key) || 0;
@@ -203,10 +201,28 @@ async function writeEntry(root, entry, usedNames) {
     const dot = fileName.lastIndexOf('.');
     fileName = dot > 0 ? `${fileName.slice(0, dot)}_${duplicate + 1}${fileName.slice(dot)}` : `${fileName}_${duplicate + 1}`;
   }
-  const fileHandle = await directory.getFileHandle(fileName, { create: true });
-  const writable = await fileHandle.createWritable();
-  await writable.write(entry.data);
-  await writable.close();
+  let lastError;
+  for (let attempt = 1; attempt <= 6; attempt++) {
+    let writable;
+    try {
+      let directory = root;
+      for (const part of safeParts.slice(0, -1)) directory = await directory.getDirectoryHandle(part, { create: true });
+      const fileHandle = await directory.getFileHandle(fileName, { create: true });
+      writable = await fileHandle.createWritable({ keepExistingData: false });
+      await writable.write(entry.data);
+      await writable.close();
+      await new Promise((resolve) => setTimeout(resolve, 70));
+      return;
+    } catch (error) {
+      lastError = error;
+      if (writable) await writable.abort().catch(() => {});
+      const transient = error.name === 'InvalidStateError' || error.name === 'NotFoundError' || /state cached|changed since|interface object/i.test(error.message || '');
+      if (!transient || attempt === 6) break;
+      $('#dockDetail').textContent = `${fileName} 저장 상태가 변경되어 다시 시도합니다. (${attempt}/5)`;
+      await new Promise((resolve) => setTimeout(resolve, 180 * attempt));
+    }
+  }
+  throw new Error(`${fileName} 저장 실패: ${lastError?.message || '파일을 쓸 수 없습니다.'}`);
 }
 
 function renderTable(items) {
