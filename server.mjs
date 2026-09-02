@@ -55,6 +55,12 @@ async function initializeDatabase() {
         object_key text NOT NULL,
         size_bytes bigint NOT NULL
       );
+      CREATE TABLE IF NOT EXISTS file_blobs (
+        object_key text PRIMARY KEY,
+        content_type text NOT NULL,
+        payload bytea NOT NULL,
+        created_at timestamptz NOT NULL DEFAULT now()
+      );
     `);
     databaseState.connected = true;
     databaseState.error = '';
@@ -113,6 +119,33 @@ async function recordStoredFile(id, stage, name, key, size) {
   if (!pool) return;
   try { await databaseReady; await pool.query('INSERT INTO stored_files (id, stage, original_name, object_key, size_bytes) VALUES ($1,$2,$3,$4,$5)', [id, stage, name, key, size]); }
   catch (error) { databaseState.error = error.message; console.error('PostgreSQL 파일 메타데이터 저장 실패:', error.message); }
+}
+
+async function persistStoredFile(id, stage, name, key, bytes, contentType) {
+  let storage = 'response-only';
+  if (bucketEnabled) {
+    try {
+      await putObject(key, bytes, contentType);
+      storage = 'bucket';
+    } catch (error) {
+      console.error('Bucket 저장 실패, PostgreSQL로 대체:', error.message);
+    }
+  }
+  if (storage !== 'bucket' && pool) {
+    await databaseReady;
+    if (databaseState.connected) {
+      await pool.query(
+        `INSERT INTO file_blobs (object_key, content_type, payload)
+         VALUES ($1, $2, $3)
+         ON CONFLICT (object_key) DO UPDATE
+         SET content_type = EXCLUDED.content_type, payload = EXCLUDED.payload, created_at = now()`,
+        [key, contentType, bytes]
+      );
+      storage = 'postgres';
+    }
+  }
+  await recordStoredFile(id, stage, name, key, bytes.length);
+  return storage;
 }
 
 function runPowerShell(command, operationId) {
@@ -413,31 +446,27 @@ const server = http.createServer(async (req, res) => {
     const url = new URL(req.url, `http://${req.headers.host}`);
     if (req.method === 'GET' && url.pathname === '/api/health') {
       await databaseReady;
-      return json(res, 200, { ok: true, database: { enabled: databaseState.enabled, connected: databaseState.connected, error: databaseState.error || null }, bucket: { enabled: bucketEnabled } });
+      const storageMode = bucketEnabled ? 'bucket' : databaseState.connected ? 'postgres' : 'response-only';
+      return json(res, 200, { ok: true, database: { enabled: databaseState.enabled, connected: databaseState.connected, error: databaseState.error || null }, bucket: { enabled: bucketEnabled }, storage: { mode: storageMode } });
     }
     if (req.method === 'POST' && url.pathname === '/api/web/clean') {
-      if (!bucketEnabled) return json(res, 503, { error: 'Railway Bucket 환경변수가 연결되지 않았습니다.' });
       const fileName = decodeURIComponent(String(req.headers['x-file-name'] || 'source.xlsx'));
       const source = await readBytes(req);
       const id = randomUUID();
       const originalKey = `original/${id}/${fileName}`;
-      await putObject(originalKey, source, 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
-      await recordStoredFile(id, 'original', fileName, originalKey, source.length);
+      await persistStoredFile(id, 'original', fileName, originalKey, source, 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
       const result = await cleanWorkbook(source, fileName);
       const cleanKey = `clean/${id}/${result.name}`;
-      await putObject(cleanKey, result.bytes, 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
-      await recordStoredFile(randomUUID(), 'clean', result.name, cleanKey, result.bytes.length);
+      await persistStoredFile(randomUUID(), 'clean', result.name, cleanKey, result.bytes, 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
       res.writeHead(200, { 'content-type':'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', 'x-output-name':encodeURIComponent(result.name), 'content-length':result.bytes.length });
       return res.end(result.bytes);
     }
     if (req.method === 'POST' && url.pathname === '/api/web/dashboard') {
-      if (!bucketEnabled) return json(res, 503, { error: 'Railway Bucket 환경변수가 연결되지 않았습니다.' });
       const fileName = decodeURIComponent(String(req.headers['x-file-name'] || 'clean.xlsx'));
       const source = await readBytes(req); const id = randomUUID();
       const result = await dashboardFromWorkbook(source, fileName);
       const dashboardKey = `dashboard/${id}/${result.name}`;
-      await putObject(dashboardKey, result.bytes, 'text/html; charset=utf-8');
-      await recordStoredFile(id, 'dashboard', result.name, dashboardKey, result.bytes.length);
+      await persistStoredFile(id, 'dashboard', result.name, dashboardKey, result.bytes, 'text/html; charset=utf-8');
       res.writeHead(200, { 'content-type':'text/html; charset=utf-8', 'x-output-name':encodeURIComponent(result.name), 'content-length':result.bytes.length });
       return res.end(result.bytes);
     }

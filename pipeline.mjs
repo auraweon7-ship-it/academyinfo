@@ -23,8 +23,8 @@ export async function cleanWorkbook(bytes, fileName) {
     }
     if (headerRow > 1) sheet.spliceRows(1, headerRow - 1);
     const headers = sheet.getRow(1).values.map((v) => String(valueOf(v) || '').trim());
-    const schoolColumn = headers.findIndex((v) => /^(학교|학교명)$/.test(v.replace(/\s/g,'')));
-    const graduationColumn = headers.findIndex((v) => v.replace(/\s/g,'').includes('졸업연도'));
+    const schoolColumn = headers.findIndex((v) => /^(학교|학교명)$/.test(String(v || '').replace(/\s/g,'')));
+    const graduationColumn = headers.findIndex((v) => String(v || '').replace(/\s/g,'').includes('졸업연도'));
     if (graduationColumn > 0) for (let row = 2; row <= sheet.rowCount; row++) sheet.getCell(row, graduationColumn).value = graduationYear(sheet.getCell(row, graduationColumn).value);
     if (schoolColumn <= 0) continue;
     const groups = new Map();
