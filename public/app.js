@@ -292,6 +292,22 @@ async function selectDirectory() {
   try {
     $('#folderButton').disabled = true;
     $('#folderButton').textContent = '폴더 선택 창 여는 중';
+    if (location.protocol === 'https:') {
+      if (!('showDirectoryPicker' in window)) throw new Error('이 브라우저는 폴더 직접 저장을 지원하지 않습니다. 최신 Chrome 또는 Edge에서 열어 주세요.');
+      const handle = await window.showDirectoryPicker({ id: 'academy-data-output', mode: 'readwrite', startIn: 'downloads' });
+      state.directoryHandle = handle;
+      state.folderToken = null;
+      state.folderPath = handle.name;
+      $('#folderButton').textContent = '저장 폴더 변경';
+      $('#folderPath').textContent = handle.name;
+      $('#folderPath').title = `선택한 폴더: ${handle.name}`;
+      $('#downloadButtonLabel').textContent = state.items.length ? `${state.items.length}개 파일 저장` : '조회 후 선택 폴더에 저장';
+      setFolderDownloadEnabled(true);
+      $('#dockStatus').textContent = '저장 폴더 지정 완료';
+      $('#dockDetail').textContent = `${handle.name} 폴더에 압축 없이 개별 파일로 저장합니다.`;
+      toast('저장 폴더가 지정되었습니다. 다운로드 버튼을 눌러 주세요.');
+      return;
+    }
     const response = await requestApi('/api/select-folder', { method: 'POST' });
     const data = await readApiJson(response);
     if (!response.ok) throw new Error(data.error);
@@ -308,6 +324,7 @@ async function selectDirectory() {
     $('#dockDetail').textContent = `${data.path}에 압축 없이 개별 파일로 저장합니다.`;
     toast('저장 폴더가 지정되었습니다. 다운로드 버튼을 눌러 주세요.');
   } catch (error) {
+    if (error.name === 'AbortError') return;
     toast(error.message || '폴더를 열 수 없습니다.');
   } finally {
     $('#folderButton').disabled = false;
