@@ -2,7 +2,7 @@ const $ = (selector) => document.querySelector(selector);
 const $$ = (selector) => [...document.querySelectorAll(selector)];
 const SETTINGS_KEY = 'academy-data-settings-v1';
 const savedSettings = (() => { try { return JSON.parse(localStorage.getItem(SETTINGS_KEY) || '{}'); } catch { return {}; } })();
-const state = { items: [], filtered: [], downloading: false, downloadCancelled: false, downloadController: null, scanController: null, directoryHandle: null, browserDownloadFallback: false, folderToken: null, folderPath: '', cleanFolderToken: null, cleanFolderPath: '', cleaning: false, cleanOperationId: null, cleanController: null, dashboardFolderToken: null, dashboardFolderPath: '', dashboarding: false, dashboardOperationId: null, dashboardController: null, settings: { openApiKey: savedSettings.openApiKey || '', apiServerUrl: savedSettings.apiServerUrl || '' } };
+const state = { items: [], filtered: [], downloading: false, downloadCancelled: false, downloadController: null, scanController: null, directoryHandle: null, browserDownloadFallback: false, folderToken: null, folderPath: '', cleanFolderToken: null, cleanFolderPath: '', cleanDirectoryHandle: null, cleaning: false, cleanOperationId: null, cleanController: null, dashboardFolderToken: null, dashboardFolderPath: '', dashboardDirectoryHandle: null, dashboarding: false, dashboardOperationId: null, dashboardController: null, settings: { openApiKey: savedSettings.openApiKey || '', apiServerUrl: savedSettings.apiServerUrl || '' } };
 const LOCAL_FOLDER_APIS = new Set(['/api/select-folder', '/api/save-files', '/api/select-clean-folder', '/api/clean-folder', '/api/select-dashboard-folder', '/api/list-dashboard-files', '/api/create-dashboards', '/api/cancel-operation']);
 const apiUrl = (path) => {
   const pathname = path.split('?')[0];
@@ -455,6 +455,13 @@ async function selectCleanFolder() {
   try {
     button.disabled = true;
     button.firstChild.textContent = 'Windows 폴더 선택 창 여는 중 ';
+    if (location.protocol === 'https:') {
+      if (!('showDirectoryPicker' in window)) throw new Error('최신 Chrome 또는 Edge에서 폴더를 선택해 주세요.');
+      const handle = await window.showDirectoryPicker({ id:'academy-clean-source', mode:'readwrite' });
+      state.cleanDirectoryHandle = handle; state.cleanFolderPath = handle.name; state.cleanFolderToken = null;
+      button.firstChild.textContent = '원본 폴더 변경 '; $('#cleanFolderPath').textContent = handle.name; $('#cleanStartButton').disabled = false;
+      setCleanStatus('', '웹 정제 준비 완료', `${handle.name}의 Excel 파일을 Railway에서 정제합니다.`); return;
+    }
     const response = await requestApi('/api/select-clean-folder', { method: 'POST' });
     const data = await readApiJson(response);
     if (!response.ok) throw new Error(data.error);
@@ -484,7 +491,7 @@ function renderCleanResults(result) {
 }
 
 async function startCleaning() {
-  if (!state.cleanFolderToken || state.cleaning) return;
+  if ((!state.cleanFolderToken && !state.cleanDirectoryHandle) || state.cleaning) return;
   state.cleaning = true;
   state.cleanOperationId = crypto.randomUUID(); state.cleanController = new AbortController(); showStop('#cleanStopButton', true);
   const startButton = $('#cleanStartButton');
@@ -494,6 +501,13 @@ async function startCleaning() {
   $('#cleanResults').classList.add('hidden');
   setCleanStatus('running', 'Excel 파일 정제 중', '파일 수와 행 수에 따라 시간이 걸릴 수 있습니다. 창을 닫지 마세요.');
   try {
+    if (state.cleanDirectoryHandle) {
+      const files=[]; for await (const entry of state.cleanDirectoryHandle.values()) if(entry.kind==='file' && /\.xlsx$/i.test(entry.name) && !entry.name.startsWith('~$')) files.push(entry);
+      if(!files.length) throw new Error('선택한 폴더에 Excel 파일이 없습니다.');
+      const output=await state.cleanDirectoryHandle.getDirectoryHandle('정제',{create:true}); const made=[];
+      for(let index=0;index<files.length;index++) { const file=await files[index].getFile(); setCleanStatus('running',`웹 정제 ${index+1} / ${files.length}`,file.name); const response=await requestApi('/api/web/clean',{method:'POST',headers:{'content-type':'application/octet-stream','x-file-name':encodeURIComponent(file.name)},body:file,signal:state.cleanController.signal}); if(!response.ok) throw new Error((await readApiJson(response)).error); const name=decodeURIComponent(response.headers.get('x-output-name')||`${file.name}_정제.xlsx`); const target=await output.getFileHandle(name,{create:true}); const writable=await target.createWritable(); await writable.write(await response.blob()); await writable.close(); made.push(name); }
+      renderCleanResults({success:made.length,failed:0,total:made.length,output:`${state.cleanDirectoryHandle.name}/정제`,files:made.map(file=>({file,status:'success',before:0,after:0,merged:0}))}); setCleanStatus('success',`${made.length}개 파일 정제 완료`,'정제 폴더에 저장했습니다.'); return;
+    }
     const response = await requestApi('/api/clean-folder', {
       method: 'POST', headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ folderToken: state.cleanFolderToken, operationId: state.cleanOperationId }), signal: state.cleanController.signal
@@ -521,7 +535,8 @@ function setDashboardStatus(type, title, detail) {
 async function selectDashboardFolder() {
   const button = $('#dashboardFolderButton');
   try {
-    button.disabled = true; button.firstChild.textContent = 'Windows 폴더 선택 창 여는 중 ';
+    button.disabled = true; button.firstChild.textContent = '폴더 선택 창 여는 중 ';
+    if(location.protocol==='https:'){if(!('showDirectoryPicker' in window))throw new Error('최신 Chrome 또는 Edge에서 폴더를 선택해 주세요.');const handle=await window.showDirectoryPicker({id:'academy-dashboard-source',mode:'readwrite'});state.dashboardDirectoryHandle=handle;state.dashboardFolderPath=handle.name;state.dashboardFolderToken=null;button.firstChild.textContent='원본 폴더 변경 ';$('#dashboardFolderPath').textContent=handle.name;$('#dashboardStartButton').disabled=false;setDashboardStatus('','생성 준비 완료',`${handle.name}의 정제 파일로 생성합니다.`);return;}
     const response = await requestApi('/api/select-dashboard-folder', { method: 'POST' }); const data = await readApiJson(response);
     if (!response.ok) throw new Error(data.error); if (data.cancelled) return;
     state.dashboardFolderToken = data.token; state.dashboardFolderPath = data.path;
@@ -531,12 +546,13 @@ async function selectDashboardFolder() {
   finally { button.disabled = false; if (!state.dashboardFolderToken) button.firstChild.textContent = '대시보드 원본 폴더 선택 '; }
 }
 async function startDashboard() {
-  if (!state.dashboardFolderToken || state.dashboarding) return; state.dashboarding = true;
+  if ((!state.dashboardFolderToken && !state.dashboardDirectoryHandle) || state.dashboarding) return; state.dashboarding = true;
   state.dashboardController = new AbortController(); showStop('#dashboardStopButton', true);
   const start = $('#dashboardStartButton'), folder = $('#dashboardFolderButton'); start.disabled = true; folder.disabled = true;
   start.querySelector('span').textContent = '대시보드 생성 중'; $('#dashboardResults').classList.add('hidden');
   setDashboardStatus('running', '정제 데이터 분석 중', '파일 수와 데이터 행 수에 따라 시간이 걸릴 수 있습니다.');
   try {
+    if(state.dashboardDirectoryHandle){let input=state.dashboardDirectoryHandle;try{input=await input.getDirectoryHandle('정제')}catch{}const files=[];for await(const entry of input.values())if(entry.kind==='file'&&/\.xlsx$/i.test(entry.name)&&!entry.name.startsWith('~$'))files.push(entry);if(!files.length)throw new Error('정제 Excel 파일이 없습니다.');const output=await state.dashboardDirectoryHandle.getDirectoryHandle('대시보드',{create:true});const made=[];for(let i=0;i<files.length;i++){const file=await files[i].getFile();setDashboardStatus('running',`대시보드 ${i+1} / ${files.length}`,file.name);const response=await requestApi('/api/web/dashboard',{method:'POST',headers:{'content-type':'application/octet-stream','x-file-name':encodeURIComponent(file.name)},body:file,signal:state.dashboardController.signal});if(!response.ok)throw new Error((await readApiJson(response)).error);const name=decodeURIComponent(response.headers.get('x-output-name')||file.name.replace(/\.xlsx$/i,'.html'));const target=await output.getFileHandle(name,{create:true});const writable=await target.createWritable();await writable.write(await response.blob());await writable.close();made.push(name)}const result=$('#dashboardResults');result.classList.remove('hidden');result.innerHTML=`<div class="clean-result-summary"><div><strong>${made.length}</strong><span>개 HTML 생성 완료</span></div><span>저장 위치: ${escapeHtml(state.dashboardDirectoryHandle.name)}/대시보드</span></div>`;setDashboardStatus('success',`${made.length}개 대시보드 생성 완료`,'대시보드 폴더에 저장했습니다.');return;}
     const mode = $('input[name="dashboardMode"]:checked').value;
     let data;
     if (mode === 'individual') {
