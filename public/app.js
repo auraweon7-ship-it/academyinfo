@@ -2,7 +2,7 @@ const $ = (selector) => document.querySelector(selector);
 const $$ = (selector) => [...document.querySelectorAll(selector)];
 const SETTINGS_KEY = 'academy-data-settings-v1';
 const savedSettings = (() => { try { return JSON.parse(localStorage.getItem(SETTINGS_KEY) || '{}'); } catch { return {}; } })();
-const state = { items: [], filtered: [], downloading: false, downloadCancelled: false, downloadController: null, scanController: null, directoryHandle: null, folderToken: null, folderPath: '', cleanFolderToken: null, cleanFolderPath: '', cleaning: false, cleanOperationId: null, cleanController: null, dashboardFolderToken: null, dashboardFolderPath: '', dashboarding: false, dashboardOperationId: null, dashboardController: null, settings: { openApiKey: savedSettings.openApiKey || '', apiServerUrl: savedSettings.apiServerUrl || '' } };
+const state = { items: [], filtered: [], downloading: false, downloadCancelled: false, downloadController: null, scanController: null, directoryHandle: null, browserDownloadFallback: false, folderToken: null, folderPath: '', cleanFolderToken: null, cleanFolderPath: '', cleaning: false, cleanOperationId: null, cleanController: null, dashboardFolderToken: null, dashboardFolderPath: '', dashboarding: false, dashboardOperationId: null, dashboardController: null, settings: { openApiKey: savedSettings.openApiKey || '', apiServerUrl: savedSettings.apiServerUrl || '' } };
 const LOCAL_FOLDER_APIS = new Set(['/api/select-folder', '/api/save-files', '/api/select-clean-folder', '/api/clean-folder', '/api/select-dashboard-folder', '/api/list-dashboard-files', '/api/create-dashboards', '/api/cancel-operation']);
 const apiUrl = (path) => {
   const pathname = path.split('?')[0];
@@ -220,8 +220,8 @@ function renderSummary() {
   $('#currentCount').textContent = (state.items.length - fallback).toLocaleString('ko-KR');
   $('#fallbackCount').textContent = fallback.toLocaleString('ko-KR');
   $('#batchCount').textContent = `${state.items.length}개 항목 · ${batches(state.items).length}개 ZIP 묶음`;
-  $('#downloadButtonLabel').textContent = state.folderToken || state.directoryHandle ? `${state.items.length}개 파일 저장` : '폴더를 먼저 선택해 주세요';
-  setFolderDownloadEnabled(Boolean(state.folderToken || state.directoryHandle));
+  $('#downloadButtonLabel').textContent = state.folderToken || state.directoryHandle || state.browserDownloadFallback ? `${state.items.length}개 파일 저장` : '폴더를 먼저 선택해 주세요';
+  setFolderDownloadEnabled(Boolean(state.folderToken || state.directoryHandle || state.browserDownloadFallback));
   state.filtered = state.items;
   renderTable(state.filtered);
 }
@@ -285,7 +285,7 @@ async function downloadAll() {
   } catch (error) {
     $('#dockStatus').textContent = error.name === 'AbortError' ? '사용자가 다운로드를 중단했습니다' : '다운로드 중단';
     $('#dockDetail').textContent = `${completed}개 완료 · ${error.name === 'AbortError' ? '중단 요청이 적용되었습니다.' : error.message || '오류가 발생했습니다.'}`;
-  } finally { state.downloading = false; state.downloadController = null; showStop('#downloadStopButton', false); setRunning('#step-download', false); setRunning('#downloadDock', false); button.disabled = false; setFolderDownloadEnabled(Boolean(state.folderToken || state.directoryHandle)); }
+  } finally { state.downloading = false; state.downloadController = null; showStop('#downloadStopButton', false); setRunning('#step-download', false); setRunning('#downloadDock', false); button.disabled = false; setFolderDownloadEnabled(Boolean(state.folderToken || state.directoryHandle || state.browserDownloadFallback)); }
 }
 
 async function selectDirectory() {
@@ -293,9 +293,24 @@ async function selectDirectory() {
     $('#folderButton').disabled = true;
     $('#folderButton').textContent = '폴더 선택 창 여는 중';
     if (location.protocol === 'https:') {
-      if (!('showDirectoryPicker' in window)) throw new Error('이 브라우저는 폴더 직접 저장을 지원하지 않습니다. 최신 Chrome 또는 Edge에서 열어 주세요.');
+      if (!('showDirectoryPicker' in window)) {
+        state.browserDownloadFallback = true;
+        state.directoryHandle = null;
+        state.folderToken = null;
+        state.folderPath = '브라우저 기본 다운로드 폴더';
+        $('#folderButton').textContent = '기본 다운로드 폴더 사용 중';
+        $('#folderPath').textContent = state.folderPath;
+        $('#folderPath').title = '브라우저 설정에 지정된 다운로드 폴더';
+        $('#downloadButtonLabel').textContent = state.items.length ? `${state.items.length}개 파일 다운로드` : '조회 후 개별 파일 다운로드';
+        setFolderDownloadEnabled(true);
+        $('#dockStatus').textContent = '브라우저 다운로드 폴더 사용';
+        $('#dockDetail').textContent = '폴더 선택을 지원하지 않아 브라우저의 기본 다운로드 폴더에 개별 파일로 저장합니다.';
+        toast('브라우저 기본 다운로드 폴더를 사용합니다.');
+        return;
+      }
       const handle = await window.showDirectoryPicker({ id: 'academy-data-output', mode: 'readwrite', startIn: 'downloads' });
       state.directoryHandle = handle;
+      state.browserDownloadFallback = false;
       state.folderToken = null;
       state.folderPath = handle.name;
       $('#folderButton').textContent = '저장 폴더 변경';
@@ -328,12 +343,12 @@ async function selectDirectory() {
     toast(error.message || '폴더를 열 수 없습니다.');
   } finally {
     $('#folderButton').disabled = false;
-    if (!state.folderToken && !state.directoryHandle) $('#folderButton').textContent = '저장 폴더 선택';
+    if (!state.folderToken && !state.directoryHandle && !state.browserDownloadFallback) $('#folderButton').textContent = '저장 폴더 선택';
   }
 }
 
 async function saveUncompressed() {
-  if (state.downloading || (!state.folderToken && !state.directoryHandle)) return;
+  if (state.downloading || (!state.folderToken && !state.directoryHandle && !state.browserDownloadFallback)) return;
   if (!state.items.length) {
     $('#dockStatus').textContent = '항목 자동 조회 중';
     $('#dockDetail').textContent = '선택한 학교 종류의 다운로드 대상을 확인하고 있습니다.';
@@ -359,6 +374,18 @@ async function saveUncompressed() {
       if (state.folderToken) {
         const data = await saveBatchToSelectedFolder(group, `${group[0].schoolCode}-${index}`);
         savedFiles += data.count;
+      } else if (state.browserDownloadFallback) {
+        const entries = await extractZip(await fetchZip(group));
+        for (const entry of entries) {
+          const fileName = entry.name.replaceAll('\\', '/').split('/').filter(Boolean).at(-1)?.replace(/[<>:"|?*]/g, '_');
+          if (!fileName) continue;
+          const href = URL.createObjectURL(new Blob([entry.data]));
+          const link = document.createElement('a');
+          link.href = href; link.download = fileName;
+          document.body.append(link); link.click(); link.remove();
+          setTimeout(() => URL.revokeObjectURL(href), 5000);
+          savedFiles++;
+        }
       } else {
         const entries = await extractZip(await fetchZip(group));
         for (const entry of entries) {
@@ -369,7 +396,7 @@ async function saveUncompressed() {
       if (index < groups.length - 1) await new Promise((resolve) => setTimeout(resolve, 350));
     }
     $('#dockStatus').textContent = '개별 파일 저장 완료';
-    $('#dockDetail').textContent = `${state.folderPath || state.directoryHandle.name}에 ${savedFiles}개 파일을 저장했습니다. ZIP 파일은 남기지 않았습니다.`;
+    $('#dockDetail').textContent = `${state.folderPath || state.directoryHandle?.name}에 ${savedFiles}개 파일을 저장했습니다. ZIP 파일은 남기지 않았습니다.`;
     toast('선택한 폴더에 개별 파일 저장을 완료했습니다.');
   } catch (error) {
     $('#dockStatus').textContent = error.name === 'AbortError' ? '사용자가 다운로드를 중단했습니다' : '개별 파일 저장 중단';
