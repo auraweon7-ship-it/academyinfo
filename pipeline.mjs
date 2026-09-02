@@ -1,5 +1,8 @@
 import ExcelJS from 'exceljs';
 import XLSX from '@e965/xlsx';
+import { readFile } from 'node:fs/promises';
+
+const dashboardTemplate = await readFile(new URL('./scripts/dashboard-template.html', import.meta.url), 'utf8');
 
 const exceptions = new Set(['고려대학교','고려대학교(세종)_분교','건국대학교','건국대학교(글로컬)_분교','동국대학교','동국대학교(WISE)_분교','연세대학교','연세대학교(미래)_분교','한양대학교','한양대학교(ERICA)_분교']);
 const metadataPattern = /기준연도|^연도$|학교종류|설립구분|지역|상태/;
@@ -35,14 +38,14 @@ function mergedValue(rows, merges, row, column) {
 function layoutOf(rows, columnCount) {
   let schoolColumn = -1, schoolHeaderRow = -1;
   for (let row = 0; row < Math.min(15, rows.length) && schoolColumn < 0; row++) {
-    for (let column = 0; column < columnCount; column++) if (/^(학교|학교명|대학명)$/.test(cleanText(rows[row]?.[column]).replace(/\s/g,''))) { schoolColumn = column; schoolHeaderRow = row; break; }
+    for (let column = 0; column < columnCount; column++) if (/^(학교|학교명|대학명|대학)$/.test(cleanText(rows[row]?.[column]).replace(/\s/g,''))) { schoolColumn = column; schoolHeaderRow = row; break; }
   }
   if (schoolColumn < 0) return null;
   let dataStart = -1;
   for (let row = schoolHeaderRow + 1; row < rows.length; row++) {
     const school = cleanText(rows[row]?.[schoolColumn]);
     const numericCount = (rows[row] || []).filter(number).length;
-    if (school && !/^(학교|학교명|대학명|남|여|계|과제|연구비)$/.test(school) && numericCount >= 3) { dataStart = row; break; }
+    if (school && !/^(학교|학교명|대학명|대학|남|여|계|과제|연구비)$/.test(school) && numericCount >= 1) { dataStart = row; break; }
   }
   if (dataStart < 0) return null;
   let headerStart = 0;
@@ -153,13 +156,34 @@ function parseSource(bytes, fileName) {
   } catch { throw new Error(`${fileName}: 파일 내용이 손상되었거나 다운로드가 완료되지 않았습니다. 1단계에서 해당 파일을 다시 다운로드해 주세요.`); }
 }
 
+function addGenericSheet(output, sourceSheet, sourceName, fileName) {
+  const rows=XLSX.utils.sheet_to_json(sourceSheet,{header:1,raw:true,defval:''});
+  if(!rows.length)return;
+  let headerRow=0,best=-1;
+  for(let row=0;row<Math.min(15,rows.length);row++){const count=(rows[row]||[]).filter((value)=>cleanText(value)).length;if(count>best){best=count;headerRow=row;}}
+  const columnCount=Math.max(1,...rows.map((row)=>row.length)),headers=Array.from({length:columnCount},(_,column)=>cleanText(rows[headerRow]?.[column])||`열${column+1}`);
+  const data=rows.slice(headerRow+1).filter((row)=>row.some((value)=>value!==''&&value!=null));
+  const title=outputTitle(cleanText(rows[0]?.[0]),fileName),sheet=output.addWorksheet(sheetName(title,sourceName));
+  sheet.addRow([`${title} 정제 데이터`]);sheet.addRow(['']);sheet.addRow(headers);data.forEach((row)=>sheet.addRow(Array.from({length:columnCount},(_,column)=>row[column]??'')));
+  sheet.mergeCells(1,1,1,columnCount);sheet.mergeCells(2,1,2,columnCount);styleOutputSheet(sheet,headers,data.length);
+}
+
+function styleOutputSheet(sheet, headers, dataRowCount) {
+  const lastColumn=Math.max(1,headers.length),lastRow=3+dataRowCount;
+  sheet.getRow(1).font={name:'맑은 고딕',bold:true,size:12};sheet.getRow(2).font={name:'맑은 고딕',size:9,color:{argb:'FF666666'}};
+  sheet.getRow(3).height=34;sheet.getRow(3).eachCell((cell)=>{cell.font={name:'맑은 고딕',bold:true,size:9,color:{argb:'FFFFFFFF'}};cell.fill={type:'pattern',pattern:'solid',fgColor:{argb:'FF1F4E79'}};cell.alignment={horizontal:'center',vertical:'middle',wrapText:true};});
+  for(let row=4;row<=lastRow;row++)for(let column=1;column<=lastColumn;column++){const cell=sheet.getCell(row,column),header=flatHeader(headers[column-1]);cell.font={name:'맑은 고딕',size:9};cell.alignment={vertical:'middle',horizontal:column<=6?'center':'right'};cell.numFmt=/졸업연도/.test(header)?'@':/비율|평균|평점|1인당/.test(header)?'#,##0.0':'#,##0';}
+  sheet.columns.forEach((column,index)=>{column.width=index===5?24:index<6?[10,11,10,9,10,24][index]:14;});
+  sheet.autoFilter={from:{row:3,column:1},to:{row:3,column:lastColumn}};sheet.views=[{state:'frozen',ySplit:3,showGridLines:false}];
+}
+
 export async function cleanWorkbook(bytes, fileName) {
   const source = parseSource(bytes, fileName);
   const output = new ExcelJS.Workbook();
   for (const sourceName of source.SheetNames) {
     const sourceSheet=source.Sheets[sourceName], range=XLSX.utils.decode_range(sourceSheet['!ref'] || 'A1:A1');
     const columnCount=range.e.c+1, rows=XLSX.utils.sheet_to_json(sourceSheet,{header:1,raw:true,defval:''}), layout=layoutOf(rows,columnCount);
-    if(!layout) continue;
+    if(!layout){addGenericSheet(output,sourceSheet,sourceName,fileName);continue;}
     const merges=sourceSheet['!merges'] || [], headers=[];
     for(let column=0;column<columnCount;column++){
       const parts=[]; for(let row=layout.headerStart;row<=layout.headerEnd;row++){const value=cleanText(mergedValue(rows,merges,row,column));if(value&&!parts.includes(value))parts.push(value);} headers.push(parts.join(' / '));
@@ -172,24 +196,19 @@ export async function cleanWorkbook(bytes, fileName) {
       for(let column=0;column<columnCount;column++){if(metadataPattern.test(headers[column])&&(values[column]===''||values[column]==null))values[column]=carry[column]??'';else if(values[column]!==''&&values[column]!=null)carry[column]=values[column];}
       let school=cleanText(values[layout.schoolColumn])||lastSchool;if(!school)continue;lastSchool=school;
       const schoolType=cleanText(values[schoolTypeColumn]),status=cleanText(values[statusColumn]);
-      if(schoolTypeColumn>=0&&!['대학교','교육대학','산업대학','기술대학'].includes(schoolType))continue;
+      if(schoolTypeColumn>=0&&!['대학','대학교','교육대학','산업대학','기술대학'].includes(schoolType))continue;
       if(statusColumn>=0&&status&&status!=='기존')continue;
       if(school==='한국전통문화대학교')continue;
       values[layout.schoolColumn]=canonicalSchool(school); cleaned.push(values);
     }
+    if(!cleaned.length){addGenericSheet(output,sourceSheet,sourceName,fileName);continue;}
     const groups=new Map();
     for(const row of cleaned){const dimensions=headers.flatMap((h,i)=>i!==layout.schoolColumn&&/기준연도|^연도$|학교종류|설립구분/.test(h)?[row[i]]:[]);const key=[row[layout.schoolColumn],...dimensions].join('\u001f');if(!groups.has(key))groups.set(key,[]);groups.get(key).push(row);}
     const aggregated=[...groups.values()].map((group)=>{const row=aggregate(group,headers,layout.schoolColumn,fileName);return /졸업생.*취업.*현황/.test(fileName)?adjustEmployment(row,group.length>1):row;});
     const title=outputTitle(cleanText(rows[0]?.[0]),fileName), unit=/연구비/.test(fileName)?'(단위 : 천원, 1인당 연구비: 천원/명)':rows.slice(0,3).flat().map(cleanText).find((v)=>/단위/.test(v))||'';
     const sheet=output.addWorksheet(sheetName(title,sourceName));
     sheet.addRow([`${title} 정제 데이터`]); sheet.addRow([unit]); sheet.addRow(headers.map(flatHeader)); aggregated.forEach((row)=>sheet.addRow(row));
-    const lastColumn=Math.max(1,columnCount), lastRow=3+aggregated.length;
-    sheet.mergeCells(1,1,1,lastColumn); sheet.mergeCells(2,1,2,lastColumn);
-    sheet.getRow(1).font={name:'맑은 고딕',bold:true,size:12}; sheet.getRow(2).font={name:'맑은 고딕',size:9,color:{argb:'FF666666'}};
-    sheet.getRow(3).height=34; sheet.getRow(3).eachCell((cell)=>{cell.font={name:'맑은 고딕',bold:true,size:9,color:{argb:'FFFFFFFF'}};cell.fill={type:'pattern',pattern:'solid',fgColor:{argb:'FF1F4E79'}};cell.alignment={horizontal:'center',vertical:'middle',wrapText:true};});
-    for(let row=4;row<=lastRow;row++)for(let column=1;column<=lastColumn;column++){const cell=sheet.getCell(row,column),header=flatHeader(headers[column-1]);cell.font={name:'맑은 고딕',size:9};cell.alignment={vertical:'middle',horizontal:column<=6?'center':'right'};cell.numFmt=/졸업연도/.test(header)?'@':/비율|평균|평점|1인당/.test(header)?'#,##0.0':'#,##0';}
-    sheet.columns.forEach((column,index)=>{column.width=index===5?24:index<6?[10,11,10,9,10,24][index]:14;});
-    sheet.autoFilter={from:{row:3,column:1},to:{row:3,column:lastColumn}};sheet.views=[{state:'frozen',ySplit:3,showGridLines:false}];
+    sheet.mergeCells(1,1,1,columnCount); sheet.mergeCells(2,1,2,columnCount);styleOutputSheet(sheet,headers.map(flatHeader),aggregated.length);
   }
   if(!output.worksheets.length)throw new Error(`${fileName}: 학교 데이터와 헤더를 찾지 못했습니다.`);
   const outputName=fileName.replace(/\.(xlsx|xls)$/i,'').replace(/_정제$/,'')+'_정제.xlsx';
@@ -198,7 +217,10 @@ export async function cleanWorkbook(bytes, fileName) {
 
 export async function dashboardFromWorkbook(bytes,fileName){
   const workbook=parseSource(bytes,fileName),sheet=workbook.Sheets[workbook.SheetNames[0]],rows=XLSX.utils.sheet_to_json(sheet,{header:1,raw:true,defval:''});
-  const title=fileName.replace(/_정제\.xlsx$/i,''),data=JSON.stringify(rows).replace(/</g,'\\u003c');
-  const html=`<!doctype html><html lang="ko"><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>${title}</title><style>body{font-family:system-ui;margin:0;background:#f3f1eb;color:#181b1f}main{max-width:1280px;margin:auto;padding:60px 24px}h1{font-size:42px}input{padding:12px;width:320px}table{width:100%;border-collapse:collapse;background:white;margin-top:24px}th,td{padding:11px;border-bottom:1px solid #ddd;text-align:left}th{position:sticky;top:0;background:#222;color:white}.wrap{max-height:70vh;overflow:auto}</style><main><h1>${title}</h1><input id="q" placeholder="학교 또는 항목 검색"><div class="wrap"><table id="t"></table></div></main><script>const rows=${data},t=document.querySelector('#t');function draw(q=''){const list=rows.filter(r=>r.join(' ').toLowerCase().includes(q.toLowerCase()));t.innerHTML='<thead><tr>'+rows[2].map(x=>'<th>'+x+'</th>').join('')+'</tr></thead><tbody>'+list.slice(3).map(r=>'<tr>'+r.map(x=>'<td>'+String(x??'')+'</td>').join('')+'</tr>').join('')+'</tbody>'}draw();document.querySelector('#q').oninput=e=>draw(e.target.value)</script></html>`;
+  let headerRow=rows.findIndex((row)=>row.some((value)=>/^(학교|학교명|대학명|대학)$/.test(cleanText(value).replace(/\s/g,''))));if(headerRow<0)headerRow=Math.min(2,rows.length-1);
+  const seen=new Map(),headers=(rows[headerRow]||[]).map((value,index)=>{const base=cleanText(value)||`열${index+1}`,count=(seen.get(base)||0)+1;seen.set(base,count);return count===1?base:`${base} (${count})`;});
+  const dataRows=rows.slice(headerRow+1).filter((row)=>row.some((value)=>value!==''&&value!=null)).map((row)=>Object.fromEntries(headers.map((header,index)=>[header,row[index]??''])));
+  const title=fileName.replace(/_정제\.xlsx$/i,''),pack={datasets:[{name:title,headers,rows:dataRows}]},json=JSON.stringify(pack).replace(/<\//g,'<\\/');
+  const html=dashboardTemplate.replaceAll('__TITLE_TEXT__',`${title} · 데이터 대시보드`.replace(/[&<>]/g,(character)=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[character]))).replace('__DATA_JSON__',json);
   return{name:title+'.html',bytes:Buffer.from(html)};
 }
