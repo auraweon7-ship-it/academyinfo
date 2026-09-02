@@ -14,7 +14,10 @@
       <span class="brand-mark">A</span>
       <span>ACADEMY DATA</span>
     </a>
-    <a class="source-link" href="https://www.academyinfo.go.kr/popup/main0810/list.do" target="_blank" rel="noreferrer">원본 다운로드 창 <span>↗</span></a>
+    <div class="topbar-actions">
+      <button id="settingsButton" class="settings-button" type="button" aria-haspopup="dialog" aria-controls="settingsDialog"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 15.25A3.25 3.25 0 1 0 12 8.75a3.25 3.25 0 0 0 0 6.5Z"/><path d="M19.4 13.5c.04-.49.04-1.01 0-1.5l2-1.55-2-3.46-2.47.99a8.22 8.22 0 0 0-2.6-1.5L14 3.84h-4l-.34 2.64a8.22 8.22 0 0 0-2.59 1.5L4.6 6.99l-2 3.46L4.6 12a9.3 9.3 0 0 0 0 1.5l-2 1.55 2 3.46 2.47-.99a8.22 8.22 0 0 0 2.6 1.5l.33 2.64h4l.34-2.64a8.22 8.22 0 0 0 2.59-1.5l2.47.99 2-3.46-2-1.55Z"/></svg><span>설정</span><i id="settingsIndicator" aria-hidden="true"></i></button>
+      <a class="source-link" href="https://www.academyinfo.go.kr/popup/main0810/list.do" target="_blank" rel="noreferrer">원본 다운로드 창 <span>↗</span></a>
+    </div>
   </header>
 
   <main>
@@ -146,6 +149,7 @@
       </div>
     </section>
   </main>
+  <dialog id="settingsDialog" class="settings-dialog" aria-labelledby="settingsTitle"><form id="settingsForm" method="dialog"><div class="settings-head"><div><p class="kicker">APPLICATION SETTINGS</p><h2 id="settingsTitle">연결 설정</h2></div><button id="settingsCloseButton" class="dialog-close" type="button" aria-label="설정 닫기">×</button></div><div class="settings-body"><label class="settings-field" for="openApiKey"><span>OpenAPI 인증키</span><small>공공데이터포털에서 발급받은 서비스 키를 입력하세요.</small><span class="secret-input"><input id="openApiKey" type="password" autocomplete="off" spellcheck="false" placeholder="인증키 입력"><button id="toggleApiKey" type="button" aria-label="인증키 표시">표시</button></span></label><label class="settings-field" for="apiServerUrl"><span>API 서버 주소 <em>선택</em></span><small>비워 두면 현재 앱의 기본 서버를 사용합니다. 외부 서버는 https:// 주소를 입력하세요.</small><input id="apiServerUrl" type="url" inputmode="url" placeholder="https://api.example.com"></label><p id="settingsMessage" class="settings-message" role="status">입력한 인증키는 이 브라우저에만 저장됩니다.</p></div><div class="settings-actions"><button id="clearSettingsButton" class="secondary-button" type="button">설정 삭제</button><button class="settings-save" type="submit">저장</button></div></form></dialog>
   <div id="toast" class="toast" role="status"></div>
   <script type="module" src="/app.js"></script>
 </body>

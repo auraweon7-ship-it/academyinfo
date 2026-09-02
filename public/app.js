@@ -1,7 +1,34 @@
 const $ = (selector) => document.querySelector(selector);
 const $$ = (selector) => [...document.querySelectorAll(selector)];
-const state = { items: [], filtered: [], downloading: false, downloadCancelled: false, downloadController: null, scanController: null, directoryHandle: null, folderToken: null, folderPath: '', cleanFolderToken: null, cleanFolderPath: '', cleaning: false, cleanOperationId: null, cleanController: null, dashboardFolderToken: null, dashboardFolderPath: '', dashboarding: false, dashboardOperationId: null, dashboardController: null };
-const apiUrl = (path) => location.protocol === 'file:' ? `http://localhost:4173${path}` : path;
+const SETTINGS_KEY = 'academy-data-settings-v1';
+const savedSettings = (() => { try { return JSON.parse(localStorage.getItem(SETTINGS_KEY) || '{}'); } catch { return {}; } })();
+const state = { items: [], filtered: [], downloading: false, downloadCancelled: false, downloadController: null, scanController: null, directoryHandle: null, folderToken: null, folderPath: '', cleanFolderToken: null, cleanFolderPath: '', cleaning: false, cleanOperationId: null, cleanController: null, dashboardFolderToken: null, dashboardFolderPath: '', dashboarding: false, dashboardOperationId: null, dashboardController: null, settings: { openApiKey: savedSettings.openApiKey || '', apiServerUrl: savedSettings.apiServerUrl || '' } };
+const LOCAL_FOLDER_APIS = new Set(['/api/select-folder', '/api/save-files', '/api/select-clean-folder', '/api/clean-folder', '/api/select-dashboard-folder', '/api/list-dashboard-files', '/api/create-dashboards', '/api/cancel-operation']);
+const apiUrl = (path) => {
+  const pathname = path.split('?')[0];
+  if (location.protocol === 'file:' && LOCAL_FOLDER_APIS.has(pathname)) return `http://localhost:4173${path}`;
+  const customServer = state.settings.apiServerUrl.trim().replace(/\/$/, '');
+  if (customServer) return `${customServer}${path}`;
+  return location.protocol === 'file:' ? `http://localhost:4173${path}` : path;
+};
+const apiHeaders = (headers = {}) => state.settings.openApiKey ? { ...headers, 'x-openapi-key': state.settings.openApiKey } : headers;
+async function requestApi(path, options = {}) {
+  try {
+    return await fetch(apiUrl(path), { ...options, headers: apiHeaders(options.headers) });
+  } catch (error) {
+    if (error.name === 'AbortError') throw error;
+    throw new Error('로컬 앱 서버에 연결할 수 없습니다. start.cmd를 실행한 뒤 다시 시도해 주세요.');
+  }
+}
+
+async function readApiJson(response) {
+  const text = await response.text();
+  try { return JSON.parse(text); }
+  catch {
+    if (/^\s*</.test(text)) throw new Error('API 대신 웹페이지가 응답했습니다. 설정의 API 서버 주소를 확인하거나 start.cmd를 실행해 주세요.');
+    throw new Error(`서버 응답을 읽을 수 없습니다. (HTTP ${response.status})`);
+  }
+}
 
 function selectedSchools() { return $$('.school-grid input:checked').map((input) => input.value); }
 function batches(items, size = 10) {
@@ -23,9 +50,57 @@ function setRunning(selector, running) {
   node.classList.toggle('is-running', running);
   node.setAttribute('aria-busy', String(running));
 }
+
+function updateSettingsIndicator() {
+  $('#settingsButton').classList.toggle('configured', Boolean(state.settings.openApiKey));
+  $('#settingsButton').title = state.settings.openApiKey ? 'OpenAPI 인증키가 설정되어 있습니다.' : '연결 설정';
+}
+
+function openSettings() {
+  $('#openApiKey').value = state.settings.openApiKey;
+  $('#apiServerUrl').value = state.settings.apiServerUrl;
+  $('#openApiKey').type = 'password';
+  $('#toggleApiKey').textContent = '표시';
+  $('#settingsMessage').className = 'settings-message';
+  $('#settingsMessage').textContent = '입력한 인증키는 이 브라우저에만 저장됩니다.';
+  $('#settingsDialog').showModal();
+  setTimeout(() => $('#openApiKey').focus(), 60);
+}
+
+function saveSettings(event) {
+  event.preventDefault();
+  const openApiKey = $('#openApiKey').value.trim();
+  let apiServerUrl = $('#apiServerUrl').value.trim().replace(/\/$/, '');
+  if (apiServerUrl) {
+    try {
+      const parsed = new URL(apiServerUrl);
+      if (!['http:', 'https:'].includes(parsed.protocol)) throw new Error();
+      apiServerUrl = parsed.origin + parsed.pathname.replace(/\/$/, '');
+    } catch {
+      $('#settingsMessage').className = 'settings-message error';
+      $('#settingsMessage').textContent = 'API 서버 주소를 http:// 또는 https:// 형식으로 입력해 주세요.';
+      return;
+    }
+  }
+  state.settings = { openApiKey, apiServerUrl };
+  localStorage.setItem(SETTINGS_KEY, JSON.stringify(state.settings));
+  updateSettingsIndicator();
+  $('#settingsDialog').close();
+  toast(openApiKey ? 'OpenAPI 설정을 저장했습니다.' : '연결 설정을 저장했습니다.');
+}
+
+function clearSettings() {
+  state.settings = { openApiKey: '', apiServerUrl: '' };
+  localStorage.removeItem(SETTINGS_KEY);
+  $('#openApiKey').value = '';
+  $('#apiServerUrl').value = '';
+  updateSettingsIndicator();
+  $('#settingsMessage').className = 'settings-message';
+  $('#settingsMessage').textContent = '저장된 설정을 삭제했습니다.';
+}
 async function cancelServerOperation(operationId) {
   if (!operationId) return;
-  await fetch(apiUrl('/api/cancel-operation'), { method:'POST', headers:{'content-type':'application/json'}, body:JSON.stringify({ operationId }) }).catch(() => {});
+  await requestApi('/api/cancel-operation', { method:'POST', headers:{'content-type':'application/json'}, body:JSON.stringify({ operationId }) }).catch(() => {});
 }
 
 function setFolderDownloadEnabled(enabled) {
@@ -36,12 +111,12 @@ function setFolderDownloadEnabled(enabled) {
 }
 
 async function fetchZip(group) {
-  const response = await fetch(apiUrl('/api/download'), {
+  const response = await requestApi('/api/download', {
     method: 'POST', headers: { 'content-type': 'application/json' },
     signal: state.downloadController?.signal,
     body: JSON.stringify({ items: group, meta: { userCode: $('#userCode').value, purposeCode: $('#purposeCode').value, detail: $('#detail').value.trim() } })
   });
-  if (!response.ok) { const data = await response.json(); throw new Error(data.error); }
+  if (!response.ok) { const data = await readApiJson(response); throw new Error(data.error); }
   return response.blob();
 }
 
@@ -49,12 +124,12 @@ async function saveBatchToSelectedFolder(group, batchKey) {
   let lastError;
   for (let attempt = 1; attempt <= 3; attempt++) {
     try {
-      const response = await fetch(apiUrl('/api/save-files'), {
+      const response = await requestApi('/api/save-files', {
         method: 'POST', headers: { 'content-type': 'application/json' },
         signal: state.downloadController?.signal,
         body: JSON.stringify({ folderToken: state.folderToken, batchKey, items: group, meta: { userCode: $('#userCode').value, purposeCode: $('#purposeCode').value, detail: $('#detail').value.trim() } })
       });
-      const data = await response.json();
+      const data = await readApiJson(response);
       if (!response.ok) throw new Error(data.error);
       return data;
     } catch (error) {
@@ -164,8 +239,8 @@ async function scan() {
   $('#tableWrap').innerHTML = '<div class="skeleton"></div><div class="skeleton"></div><div class="skeleton"></div><div class="skeleton"></div>';
   $('#results').scrollIntoView({ behavior: 'smooth', block: 'start' });
   try {
-    const response = await fetch(apiUrl(`/api/catalog?schools=${schools.join(',')}`), { signal: state.scanController.signal });
-    const data = await response.json();
+    const response = await requestApi(`/api/catalog?schools=${schools.join(',')}`, { signal: state.scanController.signal });
+    const data = await readApiJson(response);
     if (!response.ok) throw new Error(data.error);
     state.items = data.items;
     renderSummary();
@@ -217,8 +292,8 @@ async function selectDirectory() {
   try {
     $('#folderButton').disabled = true;
     $('#folderButton').textContent = '폴더 선택 창 여는 중';
-    const response = await fetch(apiUrl('/api/select-folder'), { method: 'POST' });
-    const data = await response.json();
+    const response = await requestApi('/api/select-folder', { method: 'POST' });
+    const data = await readApiJson(response);
     if (!response.ok) throw new Error(data.error);
     if (data.cancelled) return;
     state.folderToken = data.token;
@@ -301,8 +376,8 @@ async function selectCleanFolder() {
   try {
     button.disabled = true;
     button.firstChild.textContent = 'Windows 폴더 선택 창 여는 중 ';
-    const response = await fetch(apiUrl('/api/select-clean-folder'), { method: 'POST' });
-    const data = await response.json();
+    const response = await requestApi('/api/select-clean-folder', { method: 'POST' });
+    const data = await readApiJson(response);
     if (!response.ok) throw new Error(data.error);
     if (data.cancelled) return;
     state.cleanFolderToken = data.token;
@@ -340,11 +415,11 @@ async function startCleaning() {
   $('#cleanResults').classList.add('hidden');
   setCleanStatus('running', 'Excel 파일 정제 중', '파일 수와 행 수에 따라 시간이 걸릴 수 있습니다. 창을 닫지 마세요.');
   try {
-    const response = await fetch(apiUrl('/api/clean-folder'), {
+    const response = await requestApi('/api/clean-folder', {
       method: 'POST', headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ folderToken: state.cleanFolderToken, operationId: state.cleanOperationId }), signal: state.cleanController.signal
     });
-    const data = await response.json();
+    const data = await readApiJson(response);
     if (!response.ok) throw new Error(data.error);
     renderCleanResults(data);
     if (data.failed) setCleanStatus('error', `${data.success}개 완료 · ${data.failed}개 실패`, `결과는 ${data.output}에 저장했습니다.`);
@@ -368,7 +443,7 @@ async function selectDashboardFolder() {
   const button = $('#dashboardFolderButton');
   try {
     button.disabled = true; button.firstChild.textContent = 'Windows 폴더 선택 창 여는 중 ';
-    const response = await fetch(apiUrl('/api/select-dashboard-folder'), { method: 'POST' }); const data = await response.json();
+    const response = await requestApi('/api/select-dashboard-folder', { method: 'POST' }); const data = await readApiJson(response);
     if (!response.ok) throw new Error(data.error); if (data.cancelled) return;
     state.dashboardFolderToken = data.token; state.dashboardFolderPath = data.path;
     button.firstChild.textContent = '원본 폴더 변경 '; $('#dashboardFolderPath').textContent = data.path; $('#dashboardFolderPath').title = data.path;
@@ -386,22 +461,22 @@ async function startDashboard() {
     const mode = $('input[name="dashboardMode"]:checked').value;
     let data;
     if (mode === 'individual') {
-      const listResponse = await fetch(apiUrl('/api/list-dashboard-files'), { method:'POST', headers:{'content-type':'application/json'}, body:JSON.stringify({ folderToken:state.dashboardFolderToken }), signal:state.dashboardController.signal });
-      const listData = await listResponse.json(); if (!listResponse.ok) throw new Error(listData.error);
+      const listResponse = await requestApi('/api/list-dashboard-files', { method:'POST', headers:{'content-type':'application/json'}, body:JSON.stringify({ folderToken:state.dashboardFolderToken }), signal:state.dashboardController.signal });
+      const listData = await readApiJson(listResponse); if (!listResponse.ok) throw new Error(listData.error);
       const made = []; let output = listData.output;
       for (let index = 0; index < listData.files.length; index++) {
         const fileName = listData.files[index];
         state.dashboardOperationId = crypto.randomUUID(); state.dashboardController = new AbortController();
         setDashboardStatus('running', `개별 대시보드 ${index + 1} / ${listData.files.length}`, `${fileName} 파일 하나를 생성하고 있습니다.`);
-        const response = await fetch(apiUrl('/api/create-dashboards'), { method:'POST', headers:{'content-type':'application/json'}, body:JSON.stringify({ folderToken:state.dashboardFolderToken, mode, fileName, operationId:state.dashboardOperationId }), signal:state.dashboardController.signal });
-        const item = await response.json(); if (!response.ok) throw new Error(item.error?.includes('Command failed') ? `${fileName} 파일을 Excel에서 읽지 못했습니다.` : item.error);
+        const response = await requestApi('/api/create-dashboards', { method:'POST', headers:{'content-type':'application/json'}, body:JSON.stringify({ folderToken:state.dashboardFolderToken, mode, fileName, operationId:state.dashboardOperationId }), signal:state.dashboardController.signal });
+        const item = await readApiJson(response); if (!response.ok) throw new Error(item.error?.includes('Command failed') ? `${fileName} 파일을 Excel에서 읽지 못했습니다.` : item.error);
         made.push(...item.files); output = item.output;
       }
       data = { count:made.length, files:made, output };
     } else {
       state.dashboardOperationId = crypto.randomUUID();
-      const response = await fetch(apiUrl('/api/create-dashboards'), { method:'POST', headers:{'content-type':'application/json'}, body:JSON.stringify({ folderToken:state.dashboardFolderToken, mode, operationId:state.dashboardOperationId }), signal:state.dashboardController.signal });
-      data = await response.json(); if (!response.ok) throw new Error(data.error?.includes('Command failed') ? '통합 대시보드용 Excel 파일을 읽지 못했습니다.' : data.error);
+      const response = await requestApi('/api/create-dashboards', { method:'POST', headers:{'content-type':'application/json'}, body:JSON.stringify({ folderToken:state.dashboardFolderToken, mode, operationId:state.dashboardOperationId }), signal:state.dashboardController.signal });
+      data = await readApiJson(response); if (!response.ok) throw new Error(data.error?.includes('Command failed') ? '통합 대시보드용 Excel 파일을 읽지 못했습니다.' : data.error);
     }
     const result = $('#dashboardResults'); result.classList.remove('hidden');
     result.innerHTML = `<div class="clean-result-summary"><div><strong>${data.count}</strong><span>개 HTML 생성 완료</span></div><span>저장 위치: ${escapeHtml(data.output)}</span></div><div class="clean-file-list">${data.files.map(file=>`<div class="clean-file-row"><strong>${escapeHtml(file)}</strong><span>대시보드</span><span>생성 완료</span></div>`).join('')}</div>`;
@@ -427,6 +502,21 @@ $('#scanStopButton').addEventListener('click', stopScan);
 $('#downloadStopButton').addEventListener('click', stopDownload);
 $('#cleanStopButton').addEventListener('click', stopCleaning);
 $('#dashboardStopButton').addEventListener('click', stopDashboard);
+$('#settingsButton').addEventListener('click', openSettings);
+$('#settingsCloseButton').addEventListener('click', () => $('#settingsDialog').close());
+$('#settingsForm').addEventListener('submit', saveSettings);
+$('#clearSettingsButton').addEventListener('click', clearSettings);
+$('#toggleApiKey').addEventListener('click', () => {
+  const input = $('#openApiKey');
+  const visible = input.type === 'text';
+  input.type = visible ? 'password' : 'text';
+  $('#toggleApiKey').textContent = visible ? '표시' : '숨김';
+  $('#toggleApiKey').setAttribute('aria-label', visible ? '인증키 표시' : '인증키 숨기기');
+});
+$('#settingsDialog').addEventListener('click', (event) => {
+  if (event.target === $('#settingsDialog')) $('#settingsDialog').close();
+});
+updateSettingsIndicator();
 $('#selectAllSchools').addEventListener('click', () => {
   $$('.school-grid input').forEach((input) => { input.checked = true; });
   $('#formError').textContent = '';
