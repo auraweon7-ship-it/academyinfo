@@ -231,6 +231,17 @@ async function scan() {
   $('#formError').textContent = '';
   if (!schools.length) { $('#formError').textContent = '학교 종류를 하나 이상 선택해 주세요.'; return false; }
   if (!$('#detail').value.trim()) { $('#formError').textContent = '상세 내용을 입력해 주세요.'; return false; }
+  if (location.protocol === 'https:' && !state.settings.apiServerUrl) {
+    const message = 'GitHub Pages에서 다운로드하려면 설정에 별도로 배포한 API 서버 주소가 필요합니다.';
+    $('#formError').textContent = message;
+    $('#dockStatus').textContent = 'API 서버 설정 필요';
+    $('#dockDetail').textContent = '오른쪽 위 설정에서 Node API 서버의 HTTPS 주소를 입력해 주세요.';
+    $('#downloadButtonLabel').textContent = state.browserDownloadFallback ? 'API 서버 설정 후 다운로드' : '폴더를 먼저 선택해 주세요';
+    openSettings();
+    $('#settingsMessage').className = 'settings-message error';
+    $('#settingsMessage').textContent = message;
+    return false;
+  }
   const button = $('#scanButton');
   state.scanController = new AbortController(); showStop('#scanStopButton', true);
   setRunning('#step-download', true);
@@ -353,7 +364,15 @@ async function saveUncompressed() {
     $('#dockStatus').textContent = '항목 자동 조회 중';
     $('#dockDetail').textContent = '선택한 학교 종류의 다운로드 대상을 확인하고 있습니다.';
     const scanned = await scan();
-    if (!scanned || !state.items.length) return;
+    if (!scanned || !state.items.length) {
+      if ($('#dockStatus').textContent === '항목 자동 조회 중') {
+        $('#dockStatus').textContent = '다운로드 준비 실패';
+        $('#dockDetail').textContent = $('#formError').textContent || '공시 항목을 조회하지 못했습니다. 잠시 후 다시 시도해 주세요.';
+      }
+      $('#downloadButtonLabel').textContent = '다시 시도';
+      setFolderDownloadEnabled(Boolean(state.folderToken || state.directoryHandle || state.browserDownloadFallback));
+      return;
+    }
   }
   state.downloading = true;
   state.downloadCancelled = false; state.downloadController = new AbortController(); showStop('#downloadStopButton', true);
