@@ -25,6 +25,10 @@ function updateResumeUi() {
   summary.textContent = `${checkpoint.completed.length}/${checkpoint.total}개 묶음 완료 · ${checkpoint.failed.length}개 재시도 대기`;
   button.disabled = false;
 }
+function initializeExampleLinks(){
+  const base=location.protocol==='file:'||location.hostname.endsWith('github.io')?'./public/examples/':'./examples/';
+  $$('[data-example-file]').forEach(link=>{link.href=base+encodeURIComponent(link.dataset.exampleFile);});
+}
 const LOCAL_FOLDER_APIS = new Set(['/api/select-folder', '/api/save-files', '/api/select-clean-folder', '/api/clean-folder', '/api/select-dashboard-folder', '/api/list-dashboard-files', '/api/create-dashboards', '/api/cancel-operation']);
 const apiUrl = (path) => {
   const pathname = path.split('?')[0];
@@ -704,6 +708,7 @@ $('#settingsDialog').addEventListener('click', (event) => {
 updateSettingsIndicator();
 renderHistory();
 updateResumeUi();
+initializeExampleLinks();
 initializeHeroCarousel();
 $('#selectAllSchools').addEventListener('click', () => {
   $$('.school-grid input').forEach((input) => { input.checked = true; });
