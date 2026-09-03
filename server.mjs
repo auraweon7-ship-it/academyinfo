@@ -557,9 +557,12 @@ const server = http.createServer(async (req, res) => {
       const body = await readJson(req);
       const folderState = selectedFolders.get(body.folderToken);
       if (!folderState) return json(res, 400, { error: '원본 폴더를 다시 선택해 주세요.' });
+      const fileName = String(body.fileName || '');
+      if (fileName && basename(fileName) !== fileName) return json(res, 400, { error: '허용되지 않은 파일명입니다.' });
       const scriptPath = fileURLToPath(new URL('./scripts/clean-excel-folder.ps1', import.meta.url));
       const quotePs = (value) => `'${String(value).replaceAll("'", "''")}'`;
-      const command = `$cleaner=[scriptblock]::Create([IO.File]::ReadAllText(${quotePs(scriptPath)},[Text.Encoding]::UTF8)); & $cleaner -SourceFolder ${quotePs(folderState.path)}`;
+      const fileArgument = fileName ? ` -FileName ${quotePs(fileName)}` : '';
+      const command = `$cleaner=[scriptblock]::Create([IO.File]::ReadAllText(${quotePs(scriptPath)},[Text.Encoding]::UTF8)); & $cleaner -SourceFolder ${quotePs(folderState.path)}${fileArgument}`;
       const { stdout } = await runPowerShell(command, String(body.operationId || ''));
       const resultLine = stdout.trim().split(/\r?\n/).findLast((line) => line.trim().startsWith('{'));
       if (!resultLine) throw new Error('정제 결과를 확인할 수 없습니다.');

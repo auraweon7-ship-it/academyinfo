@@ -1,5 +1,6 @@
 param(
-  [Parameter(Mandatory = $true)][string]$SourceFolder
+  [Parameter(Mandatory = $true)][string]$SourceFolder,
+  [string]$FileName = ''
 )
 
 $ErrorActionPreference = 'Stop'
@@ -267,7 +268,8 @@ $source = [IO.Path]::GetFullPath($SourceFolder)
 if (-not (Test-Path -LiteralPath $source -PathType Container)) { throw '원본 폴더를 찾을 수 없습니다.' }
 $output = Join-Path $source '정제'
 New-Item -ItemType Directory -Path $output -Force | Out-Null
-$files = @(Get-ChildItem -LiteralPath $source -File | Where-Object { $_.Extension -in @('.xlsx', '.xls') -and -not $_.Name.StartsWith('~$') })
+$files = @(Get-ChildItem -LiteralPath $source -File | Where-Object { $_.Extension -in @('.xlsx', '.xls') -and -not $_.Name.StartsWith('~$') -and (-not $FileName -or $_.Name -eq $FileName) })
+if ($FileName -and -not $files.Count) { throw "선택한 원본 파일을 찾을 수 없습니다: $FileName" }
 if (-not $files.Count) { throw '원본 폴더에 XLSX 또는 XLS 파일이 없습니다.' }
 
 $excel = $null
