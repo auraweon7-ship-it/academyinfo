@@ -1,14 +1,16 @@
 import http from 'node:http';
-import { readFile, readdir, mkdir, writeFile, access } from 'node:fs/promises';
+import { readFile, readdir, mkdir, writeFile, access, unlink } from 'node:fs/promises';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { randomUUID } from 'node:crypto';
 import { inflateRawSync } from 'node:zlib';
 import { basename, dirname, extname, join, normalize, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { tmpdir } from 'node:os';
 import pg from 'pg';
 import { bucketEnabled, putObject } from './storage.mjs';
 import { cleanWorkbook, dashboardFromWorkbook, analysisInputFromWorkbook } from './pipeline.mjs';
+import { loadUniversityLocations } from './university-locations.mjs';
 
 const PORT = Number(process.env.PORT || 4173);
 const TARGET_ITEM_COUNT = 112;
@@ -491,7 +493,8 @@ const server = http.createServer(async (req, res) => {
       const fileName = decodeURIComponent(String(req.headers['x-file-name'] || 'clean.xlsx'));
       const source = await readBytes(req); validateXlsx(source, fileName); const id = randomUUID();
       const aiAnalysis=await createAiAnalysis(source,fileName,String(req.headers['x-openai-api-key']||'').trim());
-      const result = await dashboardFromWorkbook(source, fileName, aiAnalysis);
+      const locations=await loadUniversityLocations();
+      const result = await dashboardFromWorkbook(source, fileName, aiAnalysis, locations);
       const dashboardKey = `dashboard/${id}/${result.name}`;
       await persistStoredFile(id, 'dashboard', result.name, dashboardKey, result.bytes, 'text/html; charset=utf-8');
       res.writeHead(200, { 'content-type':'text/html; charset=utf-8', 'x-output-name':encodeURIComponent(result.name), 'content-length':result.bytes.length });
@@ -592,8 +595,10 @@ const server = http.createServer(async (req, res) => {
       const templatePath = fileURLToPath(new URL('./scripts/dashboard-template.html', import.meta.url));
       const quotePs = (value) => `'${String(value).replaceAll("'", "''")}'`;
       const fileArgument = fileName ? ` -FileName ${quotePs(fileName)}` : '';
-      const command = `$maker=[scriptblock]::Create([IO.File]::ReadAllText(${quotePs(scriptPath)},[Text.Encoding]::UTF8)); & $maker -SourceFolder ${quotePs(folderState.path)} -Mode ${quotePs(mode)} -TemplatePath ${quotePs(templatePath)}${fileArgument}`;
-      const { stdout } = await runPowerShell(command, String(body.operationId || ''));
+      const locationPath=join(tmpdir(),`academy-university-locations-${randomUUID()}.json`),locations=await loadUniversityLocations();
+      await writeFile(locationPath,JSON.stringify(locations),'utf8');
+      const command = `$maker=[scriptblock]::Create([IO.File]::ReadAllText(${quotePs(scriptPath)},[Text.Encoding]::UTF8)); & $maker -SourceFolder ${quotePs(folderState.path)} -Mode ${quotePs(mode)} -TemplatePath ${quotePs(templatePath)} -LocationPath ${quotePs(locationPath)}${fileArgument}`;
+      let stdout;try{({stdout}=await runPowerShell(command,String(body.operationId||'')));}finally{await unlink(locationPath).catch(()=>{});}
       const resultLine = stdout.trim().split(/\r?\n/).findLast((line) => line.trim().startsWith('{'));
       if (!resultLine) throw new Error('대시보드 생성 결과를 확인할 수 없습니다.');
       return json(res, 200, JSON.parse(resultLine));
