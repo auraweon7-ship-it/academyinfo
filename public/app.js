@@ -29,7 +29,7 @@ function initializeExampleLinks(){
   const base=location.protocol==='file:'||location.hostname.endsWith('github.io')?'./public/examples/':'./examples/';
   $$('[data-example-file]').forEach(link=>{link.href=new URL(base+encodeURIComponent(link.dataset.exampleFile),location.href).href;});
 }
-const LOCAL_FOLDER_APIS = new Set(['/api/select-folder', '/api/save-files', '/api/select-clean-folder', '/api/clean-folder', '/api/select-dashboard-folder', '/api/list-dashboard-files', '/api/create-dashboards', '/api/cancel-operation']);
+const LOCAL_FOLDER_APIS = new Set(['/api/select-folder', '/api/save-files', '/api/select-clean-folder', '/api/list-clean-files', '/api/clean-folder', '/api/select-dashboard-folder', '/api/list-dashboard-files', '/api/create-dashboards', '/api/cancel-operation']);
 const apiUrl = (path) => {
   const pathname = path.split('?')[0];
   if (location.protocol === 'file:' && LOCAL_FOLDER_APIS.has(pathname)) return `http://localhost:4173${path}`;
@@ -631,14 +631,13 @@ function renderCleanResults(result) {
   state.cleanResult = result;
   const container = $('#cleanResults');
   container.classList.remove('hidden');
-  const rows = (result.files || []).map((file) => {const running=file.status==='running',success=file.status==='success';return `<div class="clean-file-row ${success?'':'error'}"><strong>${escapeHtml(file.file)}</strong><span class="process-item-status ${running?'running':success?'success':'failed'}">${running?'진행 중':success?'성공':'실패'}</span><span>${success?`${Number(file.before||0).toLocaleString('ko-KR')} → ${Number(file.after||0).toLocaleString('ko-KR')}행 · ${Number(file.merged||0).toLocaleString('ko-KR')}행 통합`:escapeHtml(file.error||(running?'파일을 다시 정제하고 있습니다.':'정제 실패'))}</span><button class="process-retry-button" data-clean-retry="${escapeHtml(file.file)}" ${running?'disabled':''}>재정제</button></div>`;}).join('');
+  const rows = (result.files || []).map((file) => {const pending=file.status==='pending',running=file.status==='running',success=file.status==='success';return `<div class="clean-file-row ${success||pending||running?'':'error'}"><strong>${escapeHtml(file.file)}</strong><span class="process-item-status ${pending?'pending':running?'running':success?'success':'failed'}">${pending?'대기':running?'진행 중':success?'성공':'실패'}</span><span>${success?escapeHtml(file.output||`${Number(file.before||0).toLocaleString('ko-KR')} → ${Number(file.after||0).toLocaleString('ko-KR')}행 · ${Number(file.merged||0).toLocaleString('ko-KR')}행 통합`):escapeHtml(file.error||(pending?'처리 대기 중':running?'파일을 정제하고 있습니다.':'정제 실패'))}</span><button class="process-retry-button" data-clean-retry="${escapeHtml(file.file)}" ${pending||running?'disabled':''}>재정제</button></div>`;}).join('');
   const total=(result.files||[]).length||result.total||0,success=(result.files||[]).filter(file=>file.status==='success').length,failed=(result.files||[]).filter(file=>file.status==='error'||file.status==='failed').length;
   result.total=total;result.success=success;result.failed=failed;
-  container.innerHTML = `<div class="clean-result-summary"><div><strong>${success}</strong><span> / ${total}개 파일 완료</span></div><span>저장 위치: ${escapeHtml(result.output)}</span></div><div class="clean-file-list">${rows}</div>`;
+  container.innerHTML = `<div class="clean-result-summary"><div><strong>${success}</strong><span> / ${total}개 파일 완료</span></div><span>저장 위치: ${escapeHtml(result.output)}</span></div><div class="process-file-header"><span>파일명</span><span>정제 상태</span><span>처리 결과</span><span>재작업</span></div><div class="clean-file-list">${rows}</div>`;
   const rate = total ? Math.round(success / total * 100) : 0;
   $('#qualitySummary').textContent = `정제 성공률 ${rate}% · 성공 ${success}개 · 오류 ${failed}개`;
   $('#qualityMeter i').style.width = `${rate}%`;
-  addHistory('2단계 정제', failed ? '부분 완료' : '완료', `${success}/${total}개 · 품질 성공률 ${rate}%`);
 }
 
 async function retryCleanFile(fileName) {
@@ -662,8 +661,8 @@ async function retryCleanFile(fileName) {
       const response=await requestApi('/api/clean-folder',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({folderToken:state.cleanFolderToken,fileName,operationId:crypto.randomUUID()})});
       const data=await readApiJson(response);if(!response.ok)throw new Error(data.error);updated=data.files?.[0];if(!updated)throw new Error('정제 결과가 없습니다.');
     }
-    Object.assign(fileResult,updated); setCleanStatus('success','개별 재정제 완료',fileName); toast('선택한 파일을 다시 정제했습니다.');
-  } catch(error) { Object.assign(fileResult,{status:'error',error:error.message||'재정제 실패'}); setCleanStatus('error','개별 재정제 실패',fileResult.error); }
+    Object.assign(fileResult,updated); setCleanStatus('success','개별 재정제 완료',fileName);addHistory('2단계 개별 재정제','완료',fileName);toast('선택한 파일을 다시 정제했습니다.');
+  } catch(error) { Object.assign(fileResult,{status:'error',error:error.message||'재정제 실패'}); setCleanStatus('error','개별 재정제 실패',fileResult.error);addHistory('2단계 개별 재정제','실패',`${fileName} · ${fileResult.error}`); }
   finally { state.cleaning=false; renderCleanResults(state.cleanResult); }
 }
 
@@ -681,30 +680,31 @@ async function startCleaning() {
     if (state.cleanDirectoryHandle) {
       const files=[]; state.cleanRetryFiles.clear(); for await (const entry of state.cleanDirectoryHandle.values()) if(entry.kind==='file' && /\.xlsx$/i.test(entry.name) && !entry.name.startsWith('~$')) { files.push(entry); state.cleanRetryFiles.set(entry.name,entry); }
       if(!files.length) throw new Error('선택한 폴더에 Excel 파일이 없습니다.');
-      const output=await state.cleanDirectoryHandle.getDirectoryHandle('정제',{create:true}); const results=[];
+      const output=await state.cleanDirectoryHandle.getDirectoryHandle('정제',{create:true}); const results=files.map(entry=>({file:entry.name,status:'pending'}));const liveResult={output:`${state.cleanDirectoryHandle.name}/정제`,files:results};renderCleanResults(liveResult);
       for(let index=0;index<files.length;index++) {
-        const file=await files[index].getFile(); setCleanStatus('running',`웹 정제 ${index+1} / ${files.length}`,file.name);
-        if(!file.size){results.push({file:file.name,status:'failed',error:'0바이트 파일 — 1단계에서 다시 다운로드 필요'});continue;}
+        const file=await files[index].getFile(),item=results[index];item.status='running';renderCleanResults(liveResult);setCleanStatus('running',`웹 정제 ${index+1} / ${files.length}`,file.name);
+        if(!file.size){Object.assign(item,{status:'failed',error:'0바이트 파일 — 1단계에서 다시 다운로드 필요'});renderCleanResults(liveResult);continue;}
         try {
           const response=await requestApi('/api/web/clean',{method:'POST',headers:{'content-type':'application/octet-stream','x-file-name':encodeURIComponent(file.name)},body:file,signal:state.cleanController.signal});
           if(!response.ok) throw new Error((await readApiJson(response)).error);
           const name=decodeURIComponent(response.headers.get('x-output-name')||`${file.name}_정제.xlsx`); const target=await output.getFileHandle(name,{create:true}); let writable;
           try { writable=await target.createWritable({keepExistingData:false}); await writable.write(await response.blob()); await writable.close(); }
           catch(error){if(writable)await writable.abort().catch(()=>{});throw error;}
-          results.push({file:name,status:'success',before:0,after:0,merged:0});
-        } catch(error) { if(error.name==='AbortError')throw error; results.push({file:file.name,status:'failed',error:error.message||'정제 실패'}); }
+          Object.assign(item,{status:'success',output:name,before:0,after:0,merged:0});
+        } catch(error) { if(error.name==='AbortError')throw error; Object.assign(item,{status:'failed',error:error.message||'정제 실패'}); }
+        renderCleanResults(liveResult);
       }
       const success=results.filter(item=>item.status==='success').length,failed=results.length-success;
       renderCleanResults({success,failed,total:results.length,output:`${state.cleanDirectoryHandle.name}/정제`,files:results});
+      addHistory('2단계 정제',failed?'부분 완료':'완료',`${success}/${results.length}개`);
       setCleanStatus(success?'success':'error',success?`${success}개 파일 정제 완료`:'정제 가능한 파일이 없습니다.',failed?`${failed}개 손상·미완료 파일은 건너뛰었습니다.`:'정제 폴더에 저장했습니다.'); return;
     }
-    const response = await requestApi('/api/clean-folder', {
-      method: 'POST', headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ folderToken: state.cleanFolderToken, operationId: state.cleanOperationId }), signal: state.cleanController.signal
-    });
-    const data = await readApiJson(response);
-    if (!response.ok) throw new Error(data.error);
+    const listResponse=await requestApi('/api/list-clean-files',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({folderToken:state.cleanFolderToken}),signal:state.cleanController.signal});const listData=await readApiJson(listResponse);if(!listResponse.ok)throw new Error(listData.error);
+    const data={output:listData.output,files:listData.files.map(file=>({file,status:'pending'}))};renderCleanResults(data);
+    for(let index=0;index<data.files.length;index++){const item=data.files[index];item.status='running';renderCleanResults(data);setCleanStatus('running',`정제 ${index+1} / ${data.files.length}`,item.file);try{state.cleanOperationId=crypto.randomUUID();const response=await requestApi('/api/clean-folder',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({folderToken:state.cleanFolderToken,fileName:item.file,operationId:state.cleanOperationId}),signal:state.cleanController.signal});const result=await readApiJson(response);if(!response.ok)throw new Error(result.error);Object.assign(item,result.files?.[0]||{status:'failed',error:'정제 결과가 없습니다.'});}catch(error){if(error.name==='AbortError')throw error;Object.assign(item,{status:'failed',error:error.message||'정제 실패'});}renderCleanResults(data);}
+    data.success=data.files.filter(item=>item.status==='success').length;data.failed=data.files.length-data.success;data.total=data.files.length;
     renderCleanResults(data);
+    addHistory('2단계 정제',data.failed?'부분 완료':'완료',`${data.success}/${data.total}개`);
     if (data.failed) setCleanStatus('error', `${data.success}개 완료 · ${data.failed}개 실패`, `결과는 ${data.output}에 저장했습니다.`);
     else setCleanStatus('success', `${data.success}개 파일 정제 완료`, `정제 결과를 ${data.output}에 저장했습니다.`);
     toast('데이터 정제가 완료되었습니다.');
@@ -724,8 +724,8 @@ function setDashboardStatus(type, title, detail) {
 }
 function renderDashboardResults(result) {
   state.dashboardResult=result;const container=$('#dashboardResults');container.classList.remove('hidden');
-  const rows=(result.items||[]).map((item)=>{const running=item.status==='running',success=item.status==='success';return `<div class="clean-file-row ${success?'':'error'}"><strong>${escapeHtml(item.file)}</strong><span class="process-item-status ${running?'running':success?'success':'failed'}">${running?'진행 중':success?'성공':'실패'}</span><span>${success?escapeHtml(item.output||'HTML 생성 완료'):escapeHtml(item.error||'생성 실패')}</span><button class="process-retry-button" data-dashboard-retry="${escapeHtml(item.file)}" ${running?'disabled':''}>재제작</button></div>`;}).join('');
-  const success=(result.items||[]).filter((item)=>item.status==='success').length;container.innerHTML=`<div class="clean-result-summary"><div><strong>${success}</strong><span> / ${(result.items||[]).length}개 HTML 완료</span></div><span>저장 위치: ${escapeHtml(result.output||'대시보드')}</span></div><div class="clean-file-list">${rows}</div>`;
+  const rows=(result.items||[]).map((item)=>{const pending=item.status==='pending',running=item.status==='running',success=item.status==='success';return `<div class="clean-file-row ${success||pending||running?'':'error'}"><strong>${escapeHtml(item.file)}</strong><span class="process-item-status ${pending?'pending':running?'running':success?'success':'failed'}">${pending?'대기':running?'진행 중':success?'성공':'실패'}</span><span>${success?escapeHtml(item.output||'HTML 생성 완료'):escapeHtml(item.error||(pending?'처리 대기 중':running?'대시보드를 만들고 있습니다.':'생성 실패'))}</span><button class="process-retry-button" data-dashboard-retry="${escapeHtml(item.file)}" ${pending||running?'disabled':''}>재제작</button></div>`;}).join('');
+  const success=(result.items||[]).filter((item)=>item.status==='success').length;container.innerHTML=`<div class="clean-result-summary"><div><strong>${success}</strong><span> / ${(result.items||[]).length}개 HTML 완료</span></div><span>저장 위치: ${escapeHtml(result.output||'대시보드')}</span></div><div class="process-file-header"><span>파일명</span><span>제작 상태</span><span>처리 결과</span><span>재작업</span></div><div class="clean-file-list">${rows}</div>`;
 }
 async function retryDashboardFile(fileName) {
   if(state.dashboarding)return;const item=state.dashboardResult?.items?.find((entry)=>entry.file===fileName);if(!item)return;
@@ -762,23 +762,24 @@ async function startDashboard() {
     if(state.dashboardDirectoryHandle){
       let input=state.dashboardDirectoryHandle;try{input=await input.getDirectoryHandle('정제')}catch{}
       const files=[];state.dashboardRetryFiles.clear();for await(const entry of input.values())if(entry.kind==='file'&&/\.xlsx$/i.test(entry.name)&&!entry.name.startsWith('~$')){files.push(entry);state.dashboardRetryFiles.set(entry.name,entry);}
-      if(!files.length)throw new Error('정제 Excel 파일이 없습니다.');const output=await state.dashboardDirectoryHandle.getDirectoryHandle('대시보드',{create:true});const items=[];
-      for(let i=0;i<files.length;i++){const file=await files[i].getFile();setDashboardStatus('running',`대시보드 ${i+1} / ${files.length}`,file.name);try{const response=await requestApi('/api/web/dashboard',{method:'POST',headers:{'content-type':'application/octet-stream','x-file-name':encodeURIComponent(file.name)},body:file,signal:state.dashboardController.signal});if(!response.ok)throw new Error((await readApiJson(response)).error);const name=decodeURIComponent(response.headers.get('x-output-name')||file.name.replace(/\.xlsx$/i,'.html'));const target=await output.getFileHandle(name,{create:true});const writable=await target.createWritable();await writable.write(await response.blob());await writable.close();items.push({file:file.name,status:'success',output:name});}catch(error){if(error.name==='AbortError')throw error;items.push({file:file.name,status:'error',error:error.message||'생성 실패'});}renderDashboardResults({items,output:`${state.dashboardDirectoryHandle.name}/대시보드`});}
+      if(!files.length)throw new Error('정제 Excel 파일이 없습니다.');const output=await state.dashboardDirectoryHandle.getDirectoryHandle('대시보드',{create:true});const items=files.map(entry=>({file:entry.name,status:'pending'})),liveResult={items,output:`${state.dashboardDirectoryHandle.name}/대시보드`};renderDashboardResults(liveResult);
+      for(let i=0;i<files.length;i++){const file=await files[i].getFile(),item=items[i];item.status='running';renderDashboardResults(liveResult);setDashboardStatus('running',`대시보드 ${i+1} / ${files.length}`,file.name);try{const response=await requestApi('/api/web/dashboard',{method:'POST',headers:{'content-type':'application/octet-stream','x-file-name':encodeURIComponent(file.name)},body:file,signal:state.dashboardController.signal});if(!response.ok)throw new Error((await readApiJson(response)).error);const name=decodeURIComponent(response.headers.get('x-output-name')||file.name.replace(/\.xlsx$/i,'.html'));const target=await output.getFileHandle(name,{create:true});const writable=await target.createWritable();await writable.write(await response.blob());await writable.close();Object.assign(item,{status:'success',output:name});}catch(error){if(error.name==='AbortError')throw error;Object.assign(item,{status:'error',error:error.message||'생성 실패'});}renderDashboardResults(liveResult);}
       const success=items.filter(item=>item.status==='success').length;renderDashboardResults({items,output:`${state.dashboardDirectoryHandle.name}/대시보드`});setDashboardStatus(success?'success':'error',`${success}/${items.length}개 대시보드 생성 완료`,success===items.length?'대시보드 폴더에 저장했습니다.':'실패 항목은 재제작 버튼으로 다시 실행할 수 있습니다.');addHistory('3단계 대시보드',success===items.length?'완료':'부분 완료',`${success}/${items.length}개 HTML 생성`);return;}
     const mode = $('input[name="dashboardMode"]:checked').value;
     let data;
     if (mode === 'individual') {
       const listResponse = await requestApi('/api/list-dashboard-files', { method:'POST', headers:{'content-type':'application/json'}, body:JSON.stringify({ folderToken:state.dashboardFolderToken }), signal:state.dashboardController.signal });
       const listData = await readApiJson(listResponse); if (!listResponse.ok) throw new Error(listData.error);
-      const made = []; const items=[]; let output = listData.output;
+      const made = []; const items=listData.files.map(file=>({file,status:'pending'})); let output = listData.output;renderDashboardResults({items,output});
       for (let index = 0; index < listData.files.length; index++) {
         const fileName = listData.files[index];
+        const item=items[index];item.status='running';renderDashboardResults({items,output});
         state.dashboardOperationId = crypto.randomUUID(); state.dashboardController = new AbortController();
         setDashboardStatus('running', `개별 대시보드 ${index + 1} / ${listData.files.length}`, `${fileName} 파일 하나를 생성하고 있습니다.`);
         try { const response = await requestApi('/api/create-dashboards', { method:'POST', headers:{'content-type':'application/json'}, body:JSON.stringify({ folderToken:state.dashboardFolderToken, mode, fileName, operationId:state.dashboardOperationId }), signal:state.dashboardController.signal });
         const result = await readApiJson(response); if (!response.ok) throw new Error(result.error?.includes('Command failed') ? `${fileName} 파일을 Excel에서 읽지 못했습니다.` : result.error);
-        made.push(...result.files); output = result.output;items.push({file:fileName,status:'success',output:result.files?.[0]||'HTML 생성 완료'});}
-        catch(error){if(error.name==='AbortError')throw error;items.push({file:fileName,status:'error',error:error.message||'생성 실패'});}renderDashboardResults({items,output});
+        made.push(...result.files); output = result.output;Object.assign(item,{status:'success',output:result.files?.[0]||'HTML 생성 완료'});}
+        catch(error){if(error.name==='AbortError')throw error;Object.assign(item,{status:'error',error:error.message||'생성 실패'});}renderDashboardResults({items,output});
       }
       data = { count:made.length, files:made, output, items };
     } else {

@@ -544,6 +544,16 @@ const server = http.createServer(async (req, res) => {
       selectedFolders.set(token, { path: resolve(folderPath), used: new Set(), completed: new Map(), selectedAt: Date.now() });
       return json(res, 200, { token, path: folderPath });
     }
+    if (req.method === 'POST' && url.pathname === '/api/list-clean-files') {
+      const body = await readJson(req);
+      const folderState = selectedFolders.get(body.folderToken);
+      if (!folderState) return json(res, 400, { error: '원본 폴더를 다시 선택해 주세요.' });
+      const files = (await readdir(folderState.path, { withFileTypes: true }))
+        .filter((entry) => entry.isFile() && ['.xlsx', '.xls'].includes(extname(entry.name).toLowerCase()) && !entry.name.startsWith('~$') && !/_정제\.(xlsx|xls)$/i.test(entry.name))
+        .map((entry) => entry.name);
+      if (!files.length) return json(res, 400, { error: '선택한 폴더에 정제할 Excel 파일이 없습니다.' });
+      return json(res, 200, { files, input: folderState.path, output: join(folderState.path, '정제') });
+    }
     if (req.method === 'POST' && url.pathname === '/api/list-dashboard-files') {
       const body = await readJson(req);
       const folderState = selectedFolders.get(body.folderToken);
