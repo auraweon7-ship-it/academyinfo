@@ -1,4 +1,5 @@
 import XLSX from '@e965/xlsx';
+import { readFile } from 'node:fs/promises';
 
 const DEFAULT_LOCATION_URL='https://www.data.go.kr/cmm/cmm/fileDownload.do?atchFileId=FILE_000000003547770&fileDetailSn=1&insertDataPrcus=N';
 const CACHE_TTL=24*60*60*1000;
@@ -16,11 +17,13 @@ function parseLocations(bytes){
 export async function loadUniversityLocations(){
   if(cache.rows.length&&Date.now()-cache.loadedAt<CACHE_TTL)return cache.rows;
   if(pending)return pending;
-  pending=(async()=>{const controller=new AbortController(),timer=setTimeout(()=>controller.abort(),25_000);try{
+  pending=(async()=>{const controller=new AbortController(),timer=setTimeout(()=>controller.abort(),25_000);let bundled=[];try{
+    const local=JSON.parse(await readFile(new URL('./data/university-locations.json',import.meta.url),'utf8'));bundled=Array.isArray(local)?local:Array.isArray(local.rows)?local.rows:[];
     const response=await fetch(process.env.UNIVERSITY_LOCATION_URL||DEFAULT_LOCATION_URL,{signal:controller.signal,headers:{'user-agent':'AcademyDataDashboard/1.0'}});
     if(!response.ok)throw new Error(`대학 주소 데이터 요청 실패 (HTTP ${response.status})`);
     const rows=parseLocations(Buffer.from(await response.arrayBuffer()));if(!rows.length)throw new Error('대학 주소 데이터가 비어 있습니다.');
     cache={loadedAt:Date.now(),rows};return rows;
+  }catch(error){if(!bundled.length)throw error;console.warn(`대학 주소 원격 갱신 실패, 내장 데이터 ${bundled.length}건 사용: ${error.message}`);cache={loadedAt:Date.now(),rows:bundled};return bundled;
   }finally{clearTimeout(timer);pending=null;}})();
   return pending;
 }
