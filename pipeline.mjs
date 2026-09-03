@@ -124,16 +124,22 @@ function aggregate(rows, headers, schoolColumn, itemKind) {
   return result;
 }
 
-function adjustEmployment(row, merged) {
-  if(row.length!==50)return row;
-  const shifted=Array(50).fill('');
-  for(let column=0;column<6;column++)shifted[column]=row[column];
-  shifted[6]=(number(row[6])?row[6]:0)+(number(row[7])?row[7]:0);
-  for(let column=7;column<50;column++)shifted[column]=row[column-1];
-  const excluded=shifted.slice(21,30).reduce((total,value)=>total+(number(value)?value:0),0),base=shifted[6]-excluded;
-  if(!base)shifted[34]='';
-  else if(merged){const employed=shifted.slice(9,21).reduce((total,value)=>total+(number(value)?value:0),0);shifted[34]=Math.round(employed/base*1000)/10;}
-  shifted[48]='';shifted[49]='';return shifted;
+function employmentLayout(headers) {
+  const graduate=headers.findIndex((header)=>/^졸업자\(A\)/.test(flatHeader(header)));
+  const rate=headers.findIndex((header)=>/취업률/.test(flatHeader(header))&&!/유지취업률/.test(flatHeader(header)));
+  const columns=(pattern)=>headers.map((header,index)=>[flatHeader(header),index]).filter(([header])=>pattern.test(header)).map(([,index])=>index);
+  return{graduate,rate,graduates:columns(/^졸업자\(A\)_(남|여)$/),employed:columns(/^취업자\(B\)_/),excluded:columns(/^(진학자\(C\)|입대자\(D\)|취업불가능자\(E\)|외국인유학생\(F\)|제외인정자\(G\))/)};
+}
+
+function adjustEmployment(row, headers, merged) {
+  const layout=employmentLayout(headers);
+  if(layout.graduate<0||layout.rate<0||layout.graduates.length<2)return row;
+  const total=layout.graduates.reduce((value,column)=>value+(number(row[column])?row[column]:0),0);
+  const shifted=[...row.slice(0,layout.graduate),total,...row.slice(layout.graduate)];
+  const excluded=layout.excluded.reduce((value,column)=>value+(number(row[column])?row[column]:0),0),base=total-excluded;
+  if(!base)shifted[layout.rate+1]='';
+  else if(merged){const employed=layout.employed.reduce((value,column)=>value+(number(row[column])?row[column]:0),0);shifted[layout.rate+1]=Math.round(employed/base*1000)/10;}
+  return shifted;
 }
 
 function outputTitle(original, fileName) {
@@ -204,11 +210,14 @@ export async function cleanWorkbook(bytes, fileName) {
     if(!cleaned.length){addGenericSheet(output,sourceSheet,sourceName,fileName);continue;}
     const groups=new Map();
     for(const row of cleaned){const dimensions=headers.flatMap((h,i)=>i!==layout.schoolColumn&&/기준연도|^연도$|학교종류|설립구분/.test(h)?[row[i]]:[]);const key=[row[layout.schoolColumn],...dimensions].join('\u001f');if(!groups.has(key))groups.set(key,[]);groups.get(key).push(row);}
-    const aggregated=[...groups.values()].map((group)=>{const row=aggregate(group,headers,layout.schoolColumn,fileName);return /졸업생.*취업.*현황/.test(fileName)?adjustEmployment(row,group.length>1):row;});
+    const employment=/졸업생.*취업.*현황/.test(fileName),employmentColumns=employment?employmentLayout(headers):null;
+    const outputHeaders=employment&&employmentColumns.graduate>=0?[...headers.slice(0,employmentColumns.graduate),'졸업자(A) / 계',...headers.slice(employmentColumns.graduate)]:headers;
+    const aggregated=[...groups.values()].map((group)=>{const row=aggregate(group,headers,layout.schoolColumn,fileName);return employment?adjustEmployment(row,headers,group.length>1):row;});
+    if(aggregated.some((row)=>row.length!==outputHeaders.length))throw new Error(`${fileName}: 정제 데이터의 헤더와 열 수가 일치하지 않습니다.`);
     const title=outputTitle(cleanText(rows[0]?.[0]),fileName), unit=/연구비/.test(fileName)?'(단위 : 천원, 1인당 연구비: 천원/명)':rows.slice(0,3).flat().map(cleanText).find((v)=>/단위/.test(v))||'';
     const sheet=output.addWorksheet(sheetName(title,sourceName));
-    sheet.addRow([`${title} 정제 데이터`]); sheet.addRow([unit]); sheet.addRow(headers.map(flatHeader)); aggregated.forEach((row)=>sheet.addRow(row));
-    sheet.mergeCells(1,1,1,columnCount); sheet.mergeCells(2,1,2,columnCount);styleOutputSheet(sheet,headers.map(flatHeader),aggregated.length);
+    sheet.addRow([`${title} 정제 데이터`]); sheet.addRow([unit]); sheet.addRow(outputHeaders.map(flatHeader)); aggregated.forEach((row)=>sheet.addRow(row));
+    sheet.mergeCells(1,1,1,outputHeaders.length); sheet.mergeCells(2,1,2,outputHeaders.length);styleOutputSheet(sheet,outputHeaders.map(flatHeader),aggregated.length);
   }
   if(!output.worksheets.length)throw new Error(`${fileName}: 학교 데이터와 헤더를 찾지 못했습니다.`);
   const outputName=fileName.replace(/\.(xlsx|xls)$/i,'').replace(/_정제$/,'')+'_정제.xlsx';
