@@ -233,13 +233,14 @@ export function analysisInputFromWorkbook(bytes,fileName){
   return{fileName,rowCount:data.length,columns:headers.length,metrics:numeric.slice(0,18)};
 }
 
-export async function dashboardFromWorkbook(bytes,fileName,aiAnalysis='',locations=[]){
+export async function dashboardFromWorkbook(bytes,fileName,aiAnalysis='',locations=[],googleMapsApiKey=''){
   const workbook=parseSource(bytes,fileName),sheet=workbook.Sheets[workbook.SheetNames[0]],rows=XLSX.utils.sheet_to_json(sheet,{header:1,raw:true,defval:''});
   let headerRow=rows.findIndex((row)=>row.some((value)=>/^(학교|학교명|대학명|대학)$/.test(cleanText(value).replace(/\s/g,''))));if(headerRow<0)headerRow=Math.min(2,rows.length-1);
   const seen=new Map(),headers=(rows[headerRow]||[]).map((value,index)=>{const base=cleanText(value)||`열${index+1}`,count=(seen.get(base)||0)+1;seen.set(base,count);return count===1?base:`${base} (${count})`;});
   const dataRows=rows.slice(headerRow+1).filter((row)=>row.some((value)=>value!==''&&value!=null)).map((row)=>Object.fromEntries(headers.map((header,index)=>[header,row[index]??''])));
   const title=fileName.replace(/_정제\.xlsx$/i,''),pack={datasets:[{name:title,headers,rows:dataRows}]},json=JSON.stringify(pack).replace(/<\//g,'<\\/');
   const analysisJson=JSON.stringify(aiAnalysis||'OpenAI API 키가 설정되지 않아 규칙 기반 요약만 표시합니다.').replace(/<\//g,'<\\/'),locationJson=JSON.stringify(locations).replace(/<\//g,'<\\/');
-  const html=dashboardTemplate.replaceAll('__TITLE_TEXT__',`${title} · 데이터 대시보드`.replace(/[&<>]/g,(character)=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[character]))).replace('__DATA_JSON__',json).replace('__AI_ANALYSIS_JSON__',analysisJson).replace('__LOCATION_JSON__',locationJson);
+  const mapsKeyJson=JSON.stringify(String(googleMapsApiKey||'')).replace(/<\//g,'<\\/');
+  const html=dashboardTemplate.replaceAll('__TITLE_TEXT__',`${title} · 데이터 대시보드`.replace(/[&<>]/g,(character)=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[character]))).replace('__DATA_JSON__',json).replace('__AI_ANALYSIS_JSON__',analysisJson).replace('__LOCATION_JSON__',locationJson).replace('__GOOGLE_MAPS_API_KEY_JSON__',mapsKeyJson);
   return{name:title+'.html',bytes:Buffer.from(html)};
 }

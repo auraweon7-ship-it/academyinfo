@@ -465,7 +465,7 @@ const server = http.createServer(async (req, res) => {
   try {
     res.setHeader('access-control-allow-origin', '*');
     res.setHeader('access-control-allow-methods', 'GET, POST, OPTIONS');
-    res.setHeader('access-control-allow-headers', 'content-type, x-openapi-key, x-openai-api-key, x-file-name');
+    res.setHeader('access-control-allow-headers', 'content-type, x-openapi-key, x-openai-api-key, x-google-maps-api-key, x-file-name');
     if (req.method === 'OPTIONS') {
       res.writeHead(204);
       return res.end();
@@ -494,7 +494,8 @@ const server = http.createServer(async (req, res) => {
       const source = await readBytes(req); validateXlsx(source, fileName); const id = randomUUID();
       const aiAnalysis=await createAiAnalysis(source,fileName,String(req.headers['x-openai-api-key']||'').trim());
       const locations=await loadUniversityLocations();
-      const result = await dashboardFromWorkbook(source, fileName, aiAnalysis, locations);
+      const googleMapsApiKey=String(req.headers['x-google-maps-api-key']||'').trim();
+      const result = await dashboardFromWorkbook(source, fileName, aiAnalysis, locations, googleMapsApiKey);
       const dashboardKey = `dashboard/${id}/${result.name}`;
       await persistStoredFile(id, 'dashboard', result.name, dashboardKey, result.bytes, 'text/html; charset=utf-8');
       res.writeHead(200, { 'content-type':'text/html; charset=utf-8', 'x-output-name':encodeURIComponent(result.name), 'content-length':result.bytes.length });
@@ -595,9 +596,11 @@ const server = http.createServer(async (req, res) => {
       const templatePath = fileURLToPath(new URL('./scripts/dashboard-template.html', import.meta.url));
       const quotePs = (value) => `'${String(value).replaceAll("'", "''")}'`;
       const fileArgument = fileName ? ` -FileName ${quotePs(fileName)}` : '';
+      const googleMapsApiKey=String(req.headers['x-google-maps-api-key']||'').trim();
+      const mapsKeyArgument=` -GoogleMapsApiKey ${quotePs(googleMapsApiKey)}`;
       const locationPath=join(tmpdir(),`academy-university-locations-${randomUUID()}.json`),locations=await loadUniversityLocations();
       await writeFile(locationPath,JSON.stringify(locations),'utf8');
-      const command = `$maker=[scriptblock]::Create([IO.File]::ReadAllText(${quotePs(scriptPath)},[Text.Encoding]::UTF8)); & $maker -SourceFolder ${quotePs(folderState.path)} -Mode ${quotePs(mode)} -TemplatePath ${quotePs(templatePath)} -LocationPath ${quotePs(locationPath)}${fileArgument}`;
+      const command = `$maker=[scriptblock]::Create([IO.File]::ReadAllText(${quotePs(scriptPath)},[Text.Encoding]::UTF8)); & $maker -SourceFolder ${quotePs(folderState.path)} -Mode ${quotePs(mode)} -TemplatePath ${quotePs(templatePath)} -LocationPath ${quotePs(locationPath)}${mapsKeyArgument}${fileArgument}`;
       let stdout;try{({stdout}=await runPowerShell(command,String(body.operationId||'')));}finally{await unlink(locationPath).catch(()=>{});}
       const resultLine = stdout.trim().split(/\r?\n/).findLast((line) => line.trim().startsWith('{'));
       if (!resultLine) throw new Error('대시보드 생성 결과를 확인할 수 없습니다.');

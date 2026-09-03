@@ -4,7 +4,7 @@ const SETTINGS_KEY = 'academy-data-settings-v1';
 const CHECKPOINT_KEY = 'academy-data-checkpoint-v1';
 const HISTORY_KEY = 'academy-data-history-v1';
 const savedSettings = (() => { try { return JSON.parse(localStorage.getItem(SETTINGS_KEY) || '{}'); } catch { return {}; } })();
-const state = { items: [], filtered: [], downloading: false, downloadCancelled: false, downloadController: null, scanController: null, directoryHandle: null, browserDownloadFallback: false, folderToken: null, folderPath: '', resumeRequested: false, cleanFolderToken: null, cleanFolderPath: '', cleanDirectoryHandle: null, cleanUploadFile: null, cleanFolderExplicit: false, cleaning: false, cleanOperationId: null, cleanController: null, cleanRetryFiles: new Map(), cleanResult: null, dashboardFolderToken: null, dashboardFolderPath: '', dashboardDirectoryHandle: null, dashboardUploadFile: null, dashboardFolderExplicit: false, dashboarding: false, dashboardOperationId: null, dashboardController: null, dashboardRetryFiles: new Map(), dashboardResult: null, settings: { openApiKey: savedSettings.openApiKey || '', openAiApiKey: savedSettings.openAiApiKey || '', apiServerUrl: savedSettings.apiServerUrl || '' } };
+const state = { items: [], filtered: [], downloading: false, downloadCancelled: false, downloadController: null, scanController: null, directoryHandle: null, browserDownloadFallback: false, folderToken: null, folderPath: '', resumeRequested: false, cleanFolderToken: null, cleanFolderPath: '', cleanDirectoryHandle: null, cleanUploadFile: null, cleanFolderExplicit: false, cleaning: false, cleanOperationId: null, cleanController: null, cleanRetryFiles: new Map(), cleanResult: null, dashboardFolderToken: null, dashboardFolderPath: '', dashboardDirectoryHandle: null, dashboardUploadFile: null, dashboardFolderExplicit: false, dashboarding: false, dashboardOperationId: null, dashboardController: null, dashboardRetryFiles: new Map(), dashboardResult: null, settings: { openApiKey: savedSettings.openApiKey || '', openAiApiKey: savedSettings.openAiApiKey || '', googleMapsApiKey: savedSettings.googleMapsApiKey || '', apiServerUrl: savedSettings.apiServerUrl || '' } };
 
 function readLocal(key, fallback) { try { return JSON.parse(localStorage.getItem(key) || '') || fallback; } catch { return fallback; } }
 function writeLocal(key, value) { try { localStorage.setItem(key, JSON.stringify(value)); } catch {} }
@@ -37,7 +37,7 @@ const apiUrl = (path) => {
   if (customServer) return `${customServer}${path}`;
   return location.protocol === 'file:' ? `http://localhost:4173${path}` : path;
 };
-const apiHeaders = (path, headers = {}) => ({ ...headers, ...(state.settings.openApiKey ? {'x-openapi-key':state.settings.openApiKey}:{}), ...(path==='/api/web/dashboard'&&state.settings.openAiApiKey ? {'x-openai-api-key':state.settings.openAiApiKey}:{}) });
+const apiHeaders = (path, headers = {}) => ({ ...headers, ...(state.settings.openApiKey ? {'x-openapi-key':state.settings.openApiKey}:{}), ...(path==='/api/web/dashboard'&&state.settings.openAiApiKey ? {'x-openai-api-key':state.settings.openAiApiKey}:{}), ...(['/api/web/dashboard','/api/create-dashboards'].includes(path)&&state.settings.googleMapsApiKey ? {'x-google-maps-api-key':state.settings.googleMapsApiKey}:{}) });
 async function requestApi(path, options = {}) {
   try {
     return await fetch(apiUrl(path), { ...options, headers: apiHeaders(path, options.headers) });
@@ -111,13 +111,14 @@ function initializeHeroCarousel() {
 }
 
 function updateSettingsIndicator() {
-  $('#settingsButton').classList.toggle('configured', Boolean(state.settings.openApiKey || state.settings.openAiApiKey));
+  $('#settingsButton').classList.toggle('configured', Boolean(state.settings.openApiKey || state.settings.openAiApiKey || state.settings.googleMapsApiKey));
   $('#settingsButton').title = state.settings.openAiApiKey ? 'OpenAI 분석 기능이 설정되어 있습니다.' : '연결 설정';
 }
 
 function openSettings() {
   $('#openApiKey').value = state.settings.openApiKey;
   $('#openAiApiKey').value = state.settings.openAiApiKey;
+  $('#googleMapsApiKey').value = state.settings.googleMapsApiKey;
   $('#apiServerUrl').value = state.settings.apiServerUrl;
   $('#openApiKey').type = 'password';
   $('#toggleApiKey').textContent = '표시';
@@ -131,6 +132,7 @@ function saveSettings(event) {
   event.preventDefault();
   const openApiKey = $('#openApiKey').value.trim();
   const openAiApiKey = $('#openAiApiKey').value.trim();
+  const googleMapsApiKey = $('#googleMapsApiKey').value.trim();
   let apiServerUrl = $('#apiServerUrl').value.trim().replace(/\/$/, '');
   if (apiServerUrl) {
     try {
@@ -143,18 +145,19 @@ function saveSettings(event) {
       return;
     }
   }
-  state.settings = { openApiKey, openAiApiKey, apiServerUrl };
+  state.settings = { openApiKey, openAiApiKey, googleMapsApiKey, apiServerUrl };
   localStorage.setItem(SETTINGS_KEY, JSON.stringify(state.settings));
   updateSettingsIndicator();
   $('#settingsDialog').close();
-  toast(openAiApiKey ? 'OpenAI 대시보드 분석 설정을 저장했습니다.' : openApiKey ? 'OpenAPI 설정을 저장했습니다.' : '연결 설정을 저장했습니다.');
+  toast(googleMapsApiKey ? 'Google Maps 대시보드 설정을 저장했습니다.' : openAiApiKey ? 'OpenAI 대시보드 분석 설정을 저장했습니다.' : openApiKey ? 'OpenAPI 설정을 저장했습니다.' : '연결 설정을 저장했습니다.');
 }
 
 function clearSettings() {
-  state.settings = { openApiKey: '', openAiApiKey: '', apiServerUrl: '' };
+  state.settings = { openApiKey: '', openAiApiKey: '', googleMapsApiKey: '', apiServerUrl: '' };
   localStorage.removeItem(SETTINGS_KEY);
   $('#openApiKey').value = '';
   $('#openAiApiKey').value = '';
+  $('#googleMapsApiKey').value = '';
   $('#apiServerUrl').value = '';
   updateSettingsIndicator();
   $('#settingsMessage').className = 'settings-message';
