@@ -68,6 +68,7 @@ function batches(items, size = 10) {
   );
 }
 function escapeHtml(value) { return String(value).replace(/[&<>'"]/g, (char) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '"': '&quot;' }[char])); }
+function itemFileName(item){return item.fileName||`${item.year}년__${item.schoolName}_${item.name}_학교별자료.xlsx`.replace(/[<>:"/\\|?*]/g,'_');}
 function toast(message) { const node = $('#toast'); node.textContent = message; node.classList.add('show'); setTimeout(() => node.classList.remove('show'), 2800); }
 function showStop(id, show) { $(id).classList.toggle('hidden', !show); }
 function setRunning(selector, running) {
@@ -272,7 +273,7 @@ async function writeEntry(root, entry, usedNames) {
 
 function renderTable(items) {
   if (!items.length) { $('#tableWrap').innerHTML = '<div class="empty">조건에 맞는 공시 항목이 없습니다.</div>'; return; }
-  $('#tableWrap').innerHTML = `<table><thead><tr><th>NO.</th><th>학교 종류</th><th>분류</th><th>공시 항목</th><th>선택 연도</th></tr></thead><tbody>${items.map((item, index) => `<tr><td>${String(index + 1).padStart(3, '0')}</td><td>${escapeHtml(item.schoolName)}</td><td>${escapeHtml(item.categoryName)}</td><td>${escapeHtml(item.name)}</td><td><span class="year-badge ${item.fallback ? 'fallback' : ''}">${item.year}${item.fallback ? ' 대체' : ''}</span></td></tr>`).join('')}</tbody></table>`;
+  $('#tableWrap').innerHTML = `<table><thead><tr><th>NO.</th><th>학교 종류</th><th>분류</th><th>파일명</th><th>선택 연도</th></tr></thead><tbody>${items.map((item, index) => `<tr><td>${String(index + 1).padStart(3, '0')}</td><td>${escapeHtml(item.schoolName)}</td><td>${escapeHtml(item.categoryName)}</td><td title="${escapeHtml(item.name)}">${escapeHtml(itemFileName(item))}</td><td><span class="year-badge ${item.fallback ? 'fallback' : ''}">${item.year}${item.fallback ? ' 대체' : ''}</span></td></tr>`).join('')}</tbody></table>`;
 }
 
 function renderSummary() {
@@ -732,6 +733,6 @@ $('#clearSchools').addEventListener('click', () => {
 });
 $('#searchInput').addEventListener('input', (event) => {
   const query = event.target.value.trim().toLowerCase();
-  state.filtered = state.items.filter((item) => `${item.name} ${item.categoryName} ${item.schoolName}`.toLowerCase().includes(query));
+  state.filtered = state.items.filter((item) => `${itemFileName(item)} ${item.name} ${item.categoryName} ${item.schoolName}`.toLowerCase().includes(query));
   renderTable(state.filtered);
 });

@@ -87,7 +87,7 @@ async function initializeDatabase() {
 const databaseReady = initializeDatabase();
 
 async function cachedCatalog(schoolCodes) {
-  const cacheKey = [...schoolCodes].sort().join(',');
+  const cacheKey = `filename-v1:${[...schoolCodes].sort().join(',')}`;
   if (pool) {
     await databaseReady;
     if (databaseState.connected) {
@@ -188,6 +188,7 @@ class AcademySession {
   async request(path, options = {}) {
     const headers = {
       'user-agent': 'Mozilla/5.0 AcademyDataBatchDownloader/1.0',
+      'accept-language': 'ko-KR,ko;q=0.9,en;q=0.5',
       referer: `${ORIGIN}/popup/main0810/list.do`,
       ...options.headers
     };
@@ -235,9 +236,11 @@ function leafItems(data, categoryCode, categoryName, schoolCode) {
       || kinds.find((x) => String(x.item_id) === String(node.item_id));
     if (!chosenYear || !kind) continue;
     seen.add(String(node.item_id));
+    const itemName = node.pgm_kor_shrt_nm || node.pgm_estn_nm || `항목 ${node.item_id}`;
+    const fileName = `${chosenYear}년__${SCHOOL_TYPES[schoolCode]}_${itemName}_학교별자료.xlsx`.replace(/[<>:"/\\|?*]/g, '_');
     items.push({
       id: String(node.item_id),
-      name: node.pgm_estn_nm || node.pgm_kor_shrt_nm || `항목 ${node.item_id}`,
+      name: itemName, fileName,
       categoryCode, categoryName, schoolCode,
       schoolName: SCHOOL_TYPES[schoolCode], year: chosenYear,
       fallback: chosenYear === '2025', kindCode: String(kind.acif_dta_rqst_knd_cd)
