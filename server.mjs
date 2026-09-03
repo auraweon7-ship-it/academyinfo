@@ -34,9 +34,10 @@ async function createAiAnalysis(bytes,fileName,apiKey){
   const controller=new AbortController(),timer=setTimeout(()=>controller.abort(),60_000);
   try{
     const summary=analysisInputFromWorkbook(bytes,fileName);
-    const response=await fetch('https://api.openai.com/v1/responses',{method:'POST',signal:controller.signal,headers:{authorization:`Bearer ${apiKey}`,'content-type':'application/json'},body:JSON.stringify({model:process.env.OPENAI_MODEL||'gpt-5-mini',store:false,max_output_tokens:1200,instructions:'당신은 한국 대학 공시 데이터 분석가입니다. 제공된 집계값만 근거로 사용하고 추측하지 마세요. 한국어로 핵심 요약, 주요 관찰 3개, 해석 시 주의점 1개를 간결하게 작성하세요. 숫자는 읽기 쉽게 표시하세요.',input:JSON.stringify(summary)})});
+    const response=await fetch('https://api.openai.com/v1/responses',{method:'POST',signal:controller.signal,headers:{authorization:`Bearer ${apiKey}`,'content-type':'application/json'},body:JSON.stringify({model:process.env.OPENAI_MODEL||'gpt-5-mini',store:false,max_output_tokens:1200,instructions:'당신은 한국 대학 공시 데이터 분석가입니다. 제공된 집계값만 근거로 사용하고 추측하지 마세요. 반드시 JSON 하나만 출력하세요. 형식은 {"headline":"연도와 주제를 포함한 핵심 인사이트 제목","summary":"대상 수, 전체 규모, 1인당 또는 평균, 설립구분, 지역, 재원·성별 등 데이터가 뒷받침하는 비교를 하나의 자연스러운 한국어 문단으로 설명","tags":["이모지와 짧은 핵심 수치 또는 관찰", "..."]}입니다. summary의 중요한 수치와 대상명은 **굵게** 표시하고 tags는 5~8개로 구성하세요. 근거가 없는 비교 차원은 생략하고 숫자는 조·억·만 단위로 읽기 쉽게 표시하세요.',input:JSON.stringify(summary)})});
     const payload=await response.json().catch(()=>({}));if(!response.ok)throw new Error(payload?.error?.message||`OpenAI API 요청 실패 (HTTP ${response.status})`);
-    return payload.output_text||payload.output?.flatMap(item=>item.content||[]).filter(part=>part.type==='output_text').map(part=>part.text).join('\n')||'AI 분석 결과가 비어 있습니다.';
+    const text=payload.output_text||payload.output?.flatMap(item=>item.content||[]).filter(part=>part.type==='output_text').map(part=>part.text).join('\n')||'';
+    try{return JSON.parse(text.replace(/^```json\s*|\s*```$/g,''));}catch{return{text:text||'AI 분석 결과가 비어 있습니다.'};}
   }catch(error){if(error.name==='AbortError')throw new Error('OpenAI 분석 시간이 초과되었습니다.');throw error;}finally{clearTimeout(timer);}
 }
 
