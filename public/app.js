@@ -51,6 +51,16 @@ function setRunning(selector, running) {
   node.setAttribute('aria-busy', String(running));
 }
 
+function initializeHeroCarousel() {
+  const carousel=$('#heroCarousel'),slides=$$('.hero-slide'),dots=$$('.hero-dots button');if(!carousel||slides.length<2)return;
+  const reduced=matchMedia('(prefers-reduced-motion: reduce)').matches;let current=0,timer;
+  const show=(index,userInitiated=false)=>{current=(index+slides.length)%slides.length;slides.forEach((slide,i)=>{const active=i===current;slide.classList.toggle('is-active',active);slide.setAttribute('aria-hidden',String(!active));});dots.forEach((dot,i)=>{const active=i===current;dot.classList.remove('is-active');dot.setAttribute('aria-selected',String(active));if(active){void dot.offsetWidth;dot.classList.add('is-active');}});$('#heroCurrent').textContent=String(current+1).padStart(2,'0');if(userInitiated)restart();};
+  const stop=()=>{if(timer){clearInterval(timer);timer=null;}};const start=()=>{if(!reduced&&!timer)timer=setInterval(()=>show(current+1),6500)};const restart=()=>{stop();start()};
+  $('#heroPrev').addEventListener('click',()=>show(current-1,true));$('#heroNext').addEventListener('click',()=>show(current+1,true));dots.forEach((dot,index)=>dot.addEventListener('click',()=>show(index,true)));
+  carousel.addEventListener('mouseenter',stop);carousel.addEventListener('mouseleave',start);carousel.addEventListener('focusin',stop);carousel.addEventListener('focusout',(event)=>{if(!carousel.contains(event.relatedTarget))start();});
+  carousel.addEventListener('keydown',(event)=>{if(event.key==='ArrowLeft')show(current-1,true);if(event.key==='ArrowRight')show(current+1,true);});document.addEventListener('visibilitychange',()=>document.hidden?stop():start());show(0);start();
+}
+
 function updateSettingsIndicator() {
   $('#settingsButton').classList.toggle('configured', Boolean(state.settings.openApiKey));
   $('#settingsButton').title = state.settings.openApiKey ? 'OpenAPI 인증키가 설정되어 있습니다.' : '연결 설정';
@@ -625,6 +635,7 @@ $('#settingsDialog').addEventListener('click', (event) => {
   if (event.target === $('#settingsDialog')) $('#settingsDialog').close();
 });
 updateSettingsIndicator();
+initializeHeroCarousel();
 $('#selectAllSchools').addEventListener('click', () => {
   $$('.school-grid input').forEach((input) => { input.checked = true; });
   $('#formError').textContent = '';
