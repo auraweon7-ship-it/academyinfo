@@ -69,6 +69,18 @@ function batches(items, size = 10) {
 }
 function escapeHtml(value) { return String(value).replace(/[&<>'"]/g, (char) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '"': '&quot;' }[char])); }
 function itemFileName(item){return item.fileName||`${item.year}년__${item.schoolName}_${item.name}_학교별자료.xlsx`.replace(/[<>:"/\\|?*]/g,'_');}
+function itemKey(item){return `${item.schoolCode}:${item.id}`;}
+function normalizedFileLabel(value){return String(value||'').normalize('NFKC').toLowerCase().replace(/학교별자료|\.xlsx?$|[^0-9a-z가-힣]/g,'');}
+function updateItemDownloadStatus(item,status,message=''){
+  item.downloadStatus=status;item.downloadMessage=message;
+  const row=$(`#tableWrap tr[data-item-key="${CSS.escape(itemKey(item))}"]`);if(!row)return;
+  const badge=row.querySelector('.item-download-status');badge.className=`item-download-status ${status}`;badge.textContent={pending:'대기',running:'진행 중',success:'성공',failed:'실패'}[status]||'대기';badge.title=message;
+  const button=row.querySelector('.item-download-button');button.disabled=status==='running'||state.downloading;button.textContent=status==='success'?'다시 받기':status==='failed'?'재시도':'다운로드';
+}
+function markGroupDownloadResult(group,fileNames){
+  const labels=(fileNames||[]).map(normalizedFileLabel).filter(Boolean);
+  for(const item of group){const tokens=[item.name,itemFileName(item)].map(normalizedFileLabel).filter(Boolean);const matched=labels.some(label=>tokens.some(token=>token.length>3&&(label.includes(token)||token.includes(label))));updateItemDownloadStatus(item,matched?'success':'failed',matched?'파일 저장 완료':'ZIP에 해당 항목 파일이 없어 개별 재시도가 필요합니다.');}
+}
 function toast(message) { const node = $('#toast'); node.textContent = message; node.classList.add('show'); setTimeout(() => node.classList.remove('show'), 2800); }
 function showStop(id, show) { $(id).classList.toggle('hidden', !show); }
 function setRunning(selector, running) {
@@ -273,7 +285,7 @@ async function writeEntry(root, entry, usedNames) {
 
 function renderTable(items) {
   if (!items.length) { $('#tableWrap').innerHTML = '<div class="empty">조건에 맞는 공시 항목이 없습니다.</div>'; return; }
-  $('#tableWrap').innerHTML = `<table><thead><tr><th>NO.</th><th>학교 종류</th><th>분류</th><th>파일명</th><th>선택 연도</th></tr></thead><tbody>${items.map((item, index) => `<tr><td>${String(index + 1).padStart(3, '0')}</td><td>${escapeHtml(item.schoolName)}</td><td>${escapeHtml(item.categoryName)}</td><td title="${escapeHtml(item.name)}">${escapeHtml(itemFileName(item))}</td><td><span class="year-badge ${item.fallback ? 'fallback' : ''}">${item.year}${item.fallback ? ' 대체' : ''}</span></td></tr>`).join('')}</tbody></table>`;
+  $('#tableWrap').innerHTML = `<table><thead><tr><th>NO.</th><th>학교 종류</th><th>분류</th><th>파일명</th><th>선택 연도</th><th>다운로드 상태</th><th>개별 다운로드</th></tr></thead><tbody>${items.map((item, index) => {const status=item.downloadStatus||'pending';return `<tr data-item-key="${escapeHtml(itemKey(item))}"><td>${String(index + 1).padStart(3, '0')}</td><td>${escapeHtml(item.schoolName)}</td><td>${escapeHtml(item.categoryName)}</td><td title="${escapeHtml(item.name)}">${escapeHtml(itemFileName(item))}</td><td><span class="year-badge ${item.fallback ? 'fallback' : ''}">${item.year}${item.fallback ? ' 대체' : ''}</span></td><td><span class="item-download-status ${status}" title="${escapeHtml(item.downloadMessage||'')}">${{pending:'대기',running:'진행 중',success:'성공',failed:'실패'}[status]||'대기'}</span></td><td><button class="item-download-button" data-download-item="${escapeHtml(itemKey(item))}" ${status==='running'||state.downloading?'disabled':''}>${status==='success'?'다시 받기':status==='failed'?'재시도':'다운로드'}</button></td></tr>`;}).join('')}</tbody></table>`;
 }
 
 function renderSummary() {
@@ -315,7 +327,7 @@ async function scan() {
     const response = await requestApi(`/api/catalog?schools=${schools.join(',')}`, { signal: state.scanController.signal });
     const data = await readApiJson(response);
     if (!response.ok) throw new Error(data.error);
-    state.items = data.items;
+    state.items = data.items.map((item) => ({ ...item, downloadStatus:'pending', downloadMessage:'' }));
     renderSummary();
     toast(`${state.items.length}개 항목을 찾았습니다.`);
     return true;
@@ -342,9 +354,12 @@ async function downloadAll() {
     for (let index = 0; index < groups.length; index++) {
       if (state.downloadCancelled) throw new DOMException('다운로드 중단', 'AbortError');
       const group = groups[index];
+      group.forEach((item) => updateItemDownloadStatus(item, 'running', 'ZIP 파일 생성 중'));
       $('#dockStatus').textContent = `전체 자동 다운로드 ${index + 1} / ${groups.length}`;
       $('#dockDetail').textContent = `${group[0].schoolName} · ${group.length}개 항목의 ZIP 파일을 생성하고 있습니다.`;
       const blob = await fetchZip(group);
+      const entries = await extractZip(blob);
+      markGroupDownloadResult(group, entries.map((entry) => entry.name));
       const href = URL.createObjectURL(blob);
       const link = document.createElement('a');
       link.href = href; link.download = `대학알리미_${group[0].schoolName}_${String(index + 1).padStart(2, '0')}.zip`;
@@ -359,9 +374,10 @@ async function downloadAll() {
     $('#dockDetail').textContent = `전체 ${state.items.length}개 항목을 ${completed}개 ZIP 파일로 저장했습니다.`;
     toast('모든 파일 다운로드가 완료되었습니다.');
   } catch (error) {
+    state.items.filter((item) => item.downloadStatus === 'running').forEach((item) => updateItemDownloadStatus(item, 'failed', error.message || '다운로드 실패'));
     $('#dockStatus').textContent = error.name === 'AbortError' ? '사용자가 다운로드를 중단했습니다' : '다운로드 중단';
     $('#dockDetail').textContent = `${completed}개 완료 · ${error.name === 'AbortError' ? '중단 요청이 적용되었습니다.' : error.message || '오류가 발생했습니다.'}`;
-  } finally { state.downloading = false; state.downloadController = null; showStop('#downloadStopButton', false); setRunning('#step-download', false); setRunning('#downloadDock', false); button.disabled = false; setFolderDownloadEnabled(Boolean(state.folderToken || state.directoryHandle || state.browserDownloadFallback)); }
+  } finally { state.downloading = false; state.downloadController = null; showStop('#downloadStopButton', false); setRunning('#step-download', false); setRunning('#downloadDock', false); button.disabled = false; setFolderDownloadEnabled(Boolean(state.folderToken || state.directoryHandle || state.browserDownloadFallback)); renderTable(state.filtered); }
 }
 
 async function selectDirectory() {
@@ -462,13 +478,16 @@ async function saveUncompressed() {
       if (state.downloadCancelled) throw new DOMException('다운로드 중단', 'AbortError');
       if (completedGroups.has(index)) continue;
       const group = groups[index];
+      group.forEach((item) => updateItemDownloadStatus(item, 'running', '개별 파일 저장 중'));
       $('#dockStatus').textContent = `다운로드 누적 ${savedFiles} / ${state.items.length}개 · 묶음 ${index + 1} / ${groups.length}`;
       $('#dockDetail').textContent = `${group[0].schoolName} 자료를 받아 선택한 폴더에 풀고 있습니다.`;
-      try { if (state.folderToken) {
+      try { let downloadedNames = []; if (state.folderToken) {
         const data = await saveBatchToSelectedFolder(group, `${runId}-${group[0].schoolCode}-${index}`); savedFiles += data.count;
+        downloadedNames = data.files || [];
         $('#dockStatus').textContent = `다운로드 누적 ${savedFiles} / ${state.items.length}개`;
       } else if (state.browserDownloadFallback) {
         const entries = await extractZip(await fetchZip(group));
+        downloadedNames = entries.map((entry) => entry.name);
         for (const entry of entries) {
           const fileName = entry.name.replaceAll('\\', '/').split('/').filter(Boolean).at(-1)?.replace(/[<>:"|?*]/g, '_');
           if (!fileName) continue;
@@ -482,16 +501,18 @@ async function saveUncompressed() {
         }
       } else {
         const entries = await extractZip(await fetchZip(group));
+        downloadedNames = entries.map((entry) => entry.name);
         for (const entry of entries) {
           await writeEntry(state.directoryHandle, entry, usedNames);
           savedFiles++;
           $('#dockStatus').textContent = `다운로드 누적 ${savedFiles} / ${state.items.length}개`;
         }
       }
+      markGroupDownloadResult(group, downloadedNames);
       completedGroups.add(index);
       writeLocal(CHECKPOINT_KEY, { signature, runId, completed:[...completedGroups], failed:failedGroups, total:groups.length, done:false, updatedAt:new Date().toISOString() });
       updateResumeUi();
-      } catch (error) { if (error.name === 'AbortError') throw error; failedGroups.push(index); $('#dockDetail').textContent = `${index + 1}번 묶음 실패 — 나머지를 계속 저장합니다.`; }
+      } catch (error) { if (error.name === 'AbortError') throw error; group.forEach((item) => updateItemDownloadStatus(item, 'failed', error.message || '다운로드 실패')); failedGroups.push(index); $('#dockDetail').textContent = `${index + 1}번 묶음 실패 — 나머지를 계속 저장합니다.`; }
       if (index < groups.length - 1) await new Promise((resolve) => setTimeout(resolve, 350));
     }
     const done = failedGroups.length === 0;
@@ -505,7 +526,55 @@ async function saveUncompressed() {
     $('#dockDetail').textContent = `${savedFiles}개 저장 · ${error.name === 'AbortError' ? '중단 요청이 적용되었습니다.' : error.message || '오류가 발생했습니다.'}`;
     addHistory('1단계 다운로드', error.name === 'AbortError' ? '중단' : '실패', `${savedFiles}개 저장 · ${error.message || ''}`);
   } finally {
-    state.downloading = false; state.downloadController = null; showStop('#downloadStopButton', false); setRunning('#step-download', false); setRunning('#downloadDock', false); setFolderDownloadEnabled(true); folderButton.disabled = false; legacyZipButton.disabled = false;
+    state.downloading = false; state.downloadController = null; showStop('#downloadStopButton', false); setRunning('#step-download', false); setRunning('#downloadDock', false); setFolderDownloadEnabled(true); folderButton.disabled = false; legacyZipButton.disabled = false; renderTable(state.filtered);
+  }
+}
+
+async function downloadSingle(item) {
+  if (!item || state.downloading) return;
+  if (!state.folderToken && !state.directoryHandle && !state.browserDownloadFallback) {
+    await selectDirectory();
+    if (!state.folderToken && !state.directoryHandle && !state.browserDownloadFallback) return;
+  }
+  state.downloading = true;
+  state.downloadCancelled = false;
+  state.downloadController = new AbortController();
+  updateItemDownloadStatus(item, 'running', '개별 다운로드 요청 중');
+  $('#dockStatus').textContent = `개별 다운로드 · ${itemFileName(item)}`;
+  $('#dockDetail').textContent = '선택한 항목 하나를 받아 저장하고 있습니다.';
+  try {
+    let names = [];
+    if (state.folderToken) {
+      const data = await saveBatchToSelectedFolder([item], `single-${crypto.randomUUID()}`);
+      names = data.files || [];
+      if (!data.count) throw new Error('저장된 파일이 없습니다.');
+    } else {
+      const entries = await extractZip(await fetchZip([item]));
+      if (!entries.length) throw new Error('ZIP 파일 안에 저장할 데이터가 없습니다.');
+      names = entries.map((entry) => entry.name);
+      if (state.browserDownloadFallback) {
+        for (const entry of entries) {
+          const fileName = entry.name.replaceAll('\\', '/').split('/').filter(Boolean).at(-1)?.replace(/[<>:"|?*]/g, '_');
+          if (!fileName) continue;
+          const href = URL.createObjectURL(new Blob([entry.data]));
+          const link = document.createElement('a'); link.href = href; link.download = fileName;
+          document.body.append(link); link.click(); link.remove(); setTimeout(() => URL.revokeObjectURL(href), 5000);
+        }
+      } else {
+        const usedNames = new Map();
+        for (const entry of entries) await writeEntry(state.directoryHandle, entry, usedNames);
+      }
+    }
+    markGroupDownloadResult([item], names);
+    $('#dockStatus').textContent = '개별 다운로드 성공';
+    $('#dockDetail').textContent = `${itemFileName(item)} 파일을 저장했습니다.`;
+    toast('선택한 항목을 다운로드했습니다.');
+  } catch (error) {
+    updateItemDownloadStatus(item, 'failed', error.message || '개별 다운로드 실패');
+    $('#dockStatus').textContent = error.name === 'AbortError' ? '개별 다운로드 중단' : '개별 다운로드 실패';
+    $('#dockDetail').textContent = error.message || '파일을 저장하지 못했습니다.';
+  } finally {
+    state.downloading = false; state.downloadController = null; renderTable(state.filtered);
   }
 }
 
@@ -699,6 +768,12 @@ async function resumeDownload(){
 $('#scanButton').addEventListener('click', scan);
 $('#downloadButton').addEventListener('click', () => { state.resumeRequested=false; saveUncompressed(); });
 $('#zipButton').addEventListener('click', downloadAll);
+$('#tableWrap').addEventListener('click', (event) => {
+  const button = event.target.closest('[data-download-item]');
+  if (!button) return;
+  const item = state.items.find((candidate) => itemKey(candidate) === button.dataset.downloadItem);
+  if (item) downloadSingle(item);
+});
 $('#folderButton').addEventListener('click', selectDirectory);
 $('#cleanFolderButton').addEventListener('click', selectCleanFolder);
 $('#cleanStartButton').addEventListener('click', startCleaning);
