@@ -4,7 +4,7 @@ const SETTINGS_KEY = 'academy-data-settings-v1';
 const CHECKPOINT_KEY = 'academy-data-checkpoint-v1';
 const HISTORY_KEY = 'academy-data-history-v1';
 const savedSettings = (() => { try { return JSON.parse(localStorage.getItem(SETTINGS_KEY) || '{}'); } catch { return {}; } })();
-const state = { items: [], filtered: [], downloading: false, downloadCancelled: false, downloadController: null, scanController: null, directoryHandle: null, browserDownloadFallback: false, folderToken: null, folderPath: '', cleanFolderToken: null, cleanFolderPath: '', cleanDirectoryHandle: null, cleanFolderExplicit: false, cleaning: false, cleanOperationId: null, cleanController: null, dashboardFolderToken: null, dashboardFolderPath: '', dashboardDirectoryHandle: null, dashboardFolderExplicit: false, dashboarding: false, dashboardOperationId: null, dashboardController: null, settings: { openApiKey: savedSettings.openApiKey || '', openAiApiKey: savedSettings.openAiApiKey || '', apiServerUrl: savedSettings.apiServerUrl || '' } };
+const state = { items: [], filtered: [], downloading: false, downloadCancelled: false, downloadController: null, scanController: null, directoryHandle: null, browserDownloadFallback: false, folderToken: null, folderPath: '', resumeRequested: false, cleanFolderToken: null, cleanFolderPath: '', cleanDirectoryHandle: null, cleanFolderExplicit: false, cleaning: false, cleanOperationId: null, cleanController: null, dashboardFolderToken: null, dashboardFolderPath: '', dashboardDirectoryHandle: null, dashboardFolderExplicit: false, dashboarding: false, dashboardOperationId: null, dashboardController: null, settings: { openApiKey: savedSettings.openApiKey || '', openAiApiKey: savedSettings.openAiApiKey || '', apiServerUrl: savedSettings.apiServerUrl || '' } };
 
 function readLocal(key, fallback) { try { return JSON.parse(localStorage.getItem(key) || '') || fallback; } catch { return fallback; } }
 function writeLocal(key, value) { try { localStorage.setItem(key, JSON.stringify(value)); } catch {} }
@@ -447,7 +447,9 @@ async function saveUncompressed() {
   const groups = batches(state.items);
   const signature = checkpointSignature();
   const previous = readLocal(CHECKPOINT_KEY, null);
-  const completedGroups = new Set(previous?.signature === signature ? previous.completed : []);
+  const resumeThisRun=state.resumeRequested&&previous?.signature===signature&&!previous?.done;state.resumeRequested=false;
+  const runId=resumeThisRun&&previous?.runId?previous.runId:crypto.randomUUID();
+  const completedGroups = new Set(resumeThisRun ? previous.completed : []);
   const failedGroups = [];
   const usedNames = new Map();
   let savedFiles = 0;
@@ -459,7 +461,7 @@ async function saveUncompressed() {
       $('#dockStatus').textContent = `압축 없이 저장 ${index + 1} / ${groups.length}`;
       $('#dockDetail').textContent = `${group[0].schoolName} 자료를 받아 선택한 폴더에 풀고 있습니다.`;
       try { if (state.folderToken) {
-        const data = await saveBatchToSelectedFolder(group, `${group[0].schoolCode}-${index}`); savedFiles += data.count;
+        const data = await saveBatchToSelectedFolder(group, `${runId}-${group[0].schoolCode}-${index}`); savedFiles += data.count;
       } else if (state.browserDownloadFallback) {
         const entries = await extractZip(await fetchZip(group));
         for (const entry of entries) {
@@ -480,13 +482,13 @@ async function saveUncompressed() {
         }
       }
       completedGroups.add(index);
-      writeLocal(CHECKPOINT_KEY, { signature, completed:[...completedGroups], failed:failedGroups, total:groups.length, done:false, updatedAt:new Date().toISOString() });
+      writeLocal(CHECKPOINT_KEY, { signature, runId, completed:[...completedGroups], failed:failedGroups, total:groups.length, done:false, updatedAt:new Date().toISOString() });
       updateResumeUi();
       } catch (error) { if (error.name === 'AbortError') throw error; failedGroups.push(index); $('#dockDetail').textContent = `${index + 1}번 묶음 실패 — 나머지를 계속 저장합니다.`; }
       if (index < groups.length - 1) await new Promise((resolve) => setTimeout(resolve, 350));
     }
     const done = failedGroups.length === 0;
-    writeLocal(CHECKPOINT_KEY, { signature, completed:[...completedGroups], failed:failedGroups, total:groups.length, done, updatedAt:new Date().toISOString() }); updateResumeUi();
+    writeLocal(CHECKPOINT_KEY, { signature, runId, completed:[...completedGroups], failed:failedGroups, total:groups.length, done, updatedAt:new Date().toISOString() }); updateResumeUi();
     $('#dockStatus').textContent = done ? '개별 파일 저장 완료' : `${failedGroups.length}개 묶음 재시도 필요`;
     $('#dockDetail').textContent = `${state.folderPath || state.directoryHandle?.name}에 ${savedFiles}개 파일을 저장했습니다.${done ? ' ZIP 파일은 남기지 않았습니다.' : ' 운영 센터에서 실패 묶음을 재시도하세요.'}`;
     addHistory('1단계 다운로드', done ? '완료' : '부분 완료', `${savedFiles}개 저장 · 실패 묶음 ${failedGroups.length}개`);
@@ -683,11 +685,12 @@ async function runFullPipeline() {
 async function resumeDownload(){
   if(!state.items.length){const ok=await scan();if(!ok)return;}
   if(!state.directoryHandle&&!state.folderToken&&!state.browserDownloadFallback)await selectDirectory();
+  state.resumeRequested=true;
   await saveUncompressed();
 }
 
 $('#scanButton').addEventListener('click', scan);
-$('#downloadButton').addEventListener('click', saveUncompressed);
+$('#downloadButton').addEventListener('click', () => { state.resumeRequested=false; saveUncompressed(); });
 $('#zipButton').addEventListener('click', downloadAll);
 $('#folderButton').addEventListener('click', selectDirectory);
 $('#cleanFolderButton').addEventListener('click', selectCleanFolder);
