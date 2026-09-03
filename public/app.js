@@ -60,8 +60,9 @@ function selectedSchools() { return $$('.school-grid input:checked').map((input)
 function batches(items, size = 10) {
   const bySchool = new Map();
   for (const item of items) {
-    if (!bySchool.has(item.schoolCode)) bySchool.set(item.schoolCode, []);
-    bySchool.get(item.schoolCode).push(item);
+    const requestGroup = `${item.schoolCode}:${item.categoryCode}`;
+    if (!bySchool.has(requestGroup)) bySchool.set(requestGroup, []);
+    bySchool.get(requestGroup).push(item);
   }
   return [...bySchool.values()].flatMap((schoolItems) =>
     Array.from({ length: Math.ceil(schoolItems.length / size) }, (_, index) => schoolItems.slice(index * size, index * size + size))
@@ -84,6 +85,7 @@ function updateItemDownloadStatus(item,status,message=''){
 }
 function markGroupDownloadResult(group,fileNames){
   const labels=(fileNames||[]).map(normalizedFileLabel).filter(Boolean);
+  if(labels.length>=group.length){group.forEach(item=>updateItemDownloadStatus(item,'success','요청한 파일 저장 완료'));return;}
   for(const item of group){const tokens=[item.name,itemFileName(item)].map(normalizedFileLabel).filter(Boolean);const matched=labels.some(label=>tokens.some(token=>token.length>3&&(label.includes(token)||token.includes(label))));updateItemDownloadStatus(item,matched?'success':'failed',matched?'파일 저장 완료':'ZIP에 해당 항목 파일이 없어 개별 재시도가 필요합니다.');}
 }
 function toast(message) { const node = $('#toast'); node.textContent = message; node.classList.add('show'); setTimeout(() => node.classList.remove('show'), 2800); }
@@ -571,7 +573,7 @@ async function downloadSingle(item) {
         for (const entry of entries) await writeEntry(state.directoryHandle, entry, usedNames);
       }
     }
-    markGroupDownloadResult([item], names);
+    updateItemDownloadStatus(item,'success',`${names.length}개 파일 저장 완료`);
     $('#dockStatus').textContent = '개별 다운로드 성공';
     $('#dockDetail').textContent = `${itemFileName(item)} 파일을 저장했습니다.`;
     toast('선택한 항목을 다운로드했습니다.');

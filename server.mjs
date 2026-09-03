@@ -295,9 +295,11 @@ async function fetchCatalog(schoolCodes) {
 async function createDownload(items, meta) {
   if (!Array.isArray(items) || items.length < 1 || items.length > 10) throw new Error('한 묶음은 1~10개 항목이어야 합니다.');
   if (items.some((item) => item.schoolCode !== items[0].schoolCode)) throw new Error('한 묶음에는 같은 학교 종류의 항목만 포함할 수 있습니다.');
+  if (items.some((item) => item.categoryCode !== items[0].categoryCode)) throw new Error('한 묶음에는 같은 공시 분류의 항목만 포함할 수 있습니다.');
+  const itemDivCd = String(items[0].categoryCode || '01');
   const session = new AcademySession();
   await session.start();
-  const requestParams = new URLSearchParams({ itemDivCd: '01', svyYr: '', fp: '', fn: '', sn: '' });
+  const requestParams = new URLSearchParams({ itemDivCd, svyYr: '', fp: '', fn: '', sn: '' });
   for (const item of items) {
     requestParams.append('all', `${item.id}^^${item.kindCode}`);
     requestParams.append('all', `${item.id}^^${item.year}`);
@@ -307,7 +309,7 @@ async function createDownload(items, meta) {
   const listData = await listResponse.json();
   if (Number(listData.M_CODE) < 0) throw new Error(listData.M_RTME || '다운로드 목록 생성 실패');
   const resultParams = new URLSearchParams({
-    schlDivCd: items[0].schoolCode, itemDivCd: '01', svyYr: '',
+    schlDivCd: items[0].schoolCode, itemDivCd, svyYr: '',
     all: items[0].schoolCode, fp: '', fn: '', sn: '', searchValue: ''
   });
   for (const row of listData.resultList1 || []) {
@@ -318,7 +320,7 @@ async function createDownload(items, meta) {
   if (Number(resultData.M_CODE) < 0) throw new Error(resultData.M_RTME || '파일 생성 실패');
   if (!Number(resultData.resultList?.exist)) throw new Error('대학알리미에 생성된 파일이 없습니다.');
   const downloadParams = new URLSearchParams({
-    itemDivCd: '01', svyYr: '', fp: resultData.resultList.fp,
+    itemDivCd, svyYr: '', fp: resultData.resultList.fp,
     fn: resultData.resultList.fn, sn: resultData.resultList.sn
   });
   let file;
