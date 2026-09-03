@@ -71,8 +71,13 @@ function escapeHtml(value) { return String(value).replace(/[&<>'"]/g, (char) => 
 function itemFileName(item){return item.fileName||`${item.year}년__${item.schoolName}_${item.name}_학교별자료.xlsx`.replace(/[<>:"/\\|?*]/g,'_');}
 function itemKey(item){return `${item.schoolCode}:${item.id}`;}
 function normalizedFileLabel(value){return String(value||'').normalize('NFKC').toLowerCase().replace(/학교별자료|\.xlsx?$|[^0-9a-z가-힣]/g,'');}
+function updateDownloadCounts(){
+  const total=state.items.length,success=state.items.filter(item=>item.downloadStatus==='success').length,failed=state.items.filter(item=>item.downloadStatus==='failed').length;
+  $('#dockTotalCount').textContent=total.toLocaleString('ko-KR');$('#dockSuccessCount').textContent=success.toLocaleString('ko-KR');$('#dockFailedCount').textContent=failed.toLocaleString('ko-KR');
+}
 function updateItemDownloadStatus(item,status,message=''){
   item.downloadStatus=status;item.downloadMessage=message;
+  updateDownloadCounts();
   const row=$(`#tableWrap tr[data-item-key="${CSS.escape(itemKey(item))}"]`);if(!row)return;
   const badge=row.querySelector('.item-download-status');badge.className=`item-download-status ${status}`;badge.textContent={pending:'대기',running:'진행 중',success:'성공',failed:'실패'}[status]||'대기';badge.title=message;
   const button=row.querySelector('.item-download-button');button.disabled=status==='running'||state.downloading;button.textContent=status==='success'?'다시 받기':status==='failed'?'재시도':'다운로드';
@@ -297,6 +302,7 @@ function renderSummary() {
   $('#downloadButtonLabel').textContent = state.folderToken || state.directoryHandle || state.browserDownloadFallback ? `${state.items.length}개 파일 저장` : '폴더를 먼저 선택해 주세요';
   setFolderDownloadEnabled(Boolean(state.folderToken || state.directoryHandle || state.browserDownloadFallback));
   state.filtered = state.items;
+  updateDownloadCounts();
   renderTable(state.filtered);
 }
 
