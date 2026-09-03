@@ -327,7 +327,7 @@ async function scan() {
   const button = $('#scanButton');
   state.scanController = new AbortController(); showStop('#scanStopButton', true);
   setRunning('#step-download', true);
-  button.disabled = true; button.querySelector('span').textContent = '대학알리미 확인 중';
+  button.disabled = true; button.classList.add('is-querying'); button.setAttribute('aria-busy','true'); button.querySelector('span').textContent = '대학알리미 확인 중';
   $('#results').classList.remove('hidden');
   $('#tableWrap').innerHTML = '<div class="skeleton"></div><div class="skeleton"></div><div class="skeleton"></div><div class="skeleton"></div>';
   $('#results').scrollIntoView({ behavior: 'smooth', block: 'start' });
@@ -344,7 +344,7 @@ async function scan() {
     state.items = []; renderSummary(); $('#formError').textContent = error.message || '목록을 가져오지 못했습니다.';
     return false;
   } finally {
-    state.scanController = null; showStop('#scanStopButton', false); setRunning('#step-download', false); button.disabled = false; button.querySelector('span').textContent = '전체 항목 다시 조회';
+    state.scanController = null; showStop('#scanStopButton', false); setRunning('#step-download', false); button.disabled = false; button.classList.remove('is-querying'); button.removeAttribute('aria-busy'); button.querySelector('span').textContent = '전체 항목 다시 조회';
   }
 }
 
