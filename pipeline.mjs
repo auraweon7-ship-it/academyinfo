@@ -215,12 +215,22 @@ export async function cleanWorkbook(bytes, fileName) {
   return{name:outputName,bytes:Buffer.from(await output.xlsx.writeBuffer())};
 }
 
-export async function dashboardFromWorkbook(bytes,fileName){
+export function analysisInputFromWorkbook(bytes,fileName){
+  const workbook=parseSource(bytes,fileName),sheet=workbook.Sheets[workbook.SheetNames[0]],rows=XLSX.utils.sheet_to_json(sheet,{header:1,raw:true,defval:''});
+  let headerRow=rows.findIndex((row)=>row.some((value)=>/^(학교|학교명|대학명|대학)$/.test(cleanText(value).replace(/\s/g,''))));if(headerRow<0)headerRow=Math.min(2,rows.length-1);
+  const headers=(rows[headerRow]||[]).map((value,index)=>cleanText(value)||`열${index+1}`),data=rows.slice(headerRow+1).filter((row)=>row.some((value)=>value!==''&&value!=null));
+  const schoolColumn=headers.findIndex((h)=>/^(학교|학교명|대학명|대학)$/.test(h.replace(/\s/g,''))),numeric=[];
+  for(let column=0;column<headers.length;column++){const values=data.map(row=>number(row[column])).filter((value)=>value!==null);if(values.length>=Math.max(2,Math.ceil(data.length*.2))&&!/(기준)?연도|코드|번호/.test(headers[column])){const sorted=[...values].sort((a,b)=>b-a);numeric.push({name:headers[column],count:values.length,sum:values.reduce((a,b)=>a+b,0),average:values.reduce((a,b)=>a+b,0)/values.length,min:Math.min(...values),max:Math.max(...values),top:data.map((row)=>({school:cleanText(row[schoolColumn])||'미상',value:number(row[column])})).filter(item=>item.value!==null).sort((a,b)=>b.value-a.value).slice(0,5)});}}
+  return{fileName,rowCount:data.length,columns:headers.length,metrics:numeric.slice(0,18)};
+}
+
+export async function dashboardFromWorkbook(bytes,fileName,aiAnalysis=''){
   const workbook=parseSource(bytes,fileName),sheet=workbook.Sheets[workbook.SheetNames[0]],rows=XLSX.utils.sheet_to_json(sheet,{header:1,raw:true,defval:''});
   let headerRow=rows.findIndex((row)=>row.some((value)=>/^(학교|학교명|대학명|대학)$/.test(cleanText(value).replace(/\s/g,''))));if(headerRow<0)headerRow=Math.min(2,rows.length-1);
   const seen=new Map(),headers=(rows[headerRow]||[]).map((value,index)=>{const base=cleanText(value)||`열${index+1}`,count=(seen.get(base)||0)+1;seen.set(base,count);return count===1?base:`${base} (${count})`;});
   const dataRows=rows.slice(headerRow+1).filter((row)=>row.some((value)=>value!==''&&value!=null)).map((row)=>Object.fromEntries(headers.map((header,index)=>[header,row[index]??''])));
   const title=fileName.replace(/_정제\.xlsx$/i,''),pack={datasets:[{name:title,headers,rows:dataRows}]},json=JSON.stringify(pack).replace(/<\//g,'<\\/');
-  const html=dashboardTemplate.replaceAll('__TITLE_TEXT__',`${title} · 데이터 대시보드`.replace(/[&<>]/g,(character)=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[character]))).replace('__DATA_JSON__',json);
+  const analysisJson=JSON.stringify(aiAnalysis||'OpenAI API 키가 설정되지 않아 규칙 기반 요약만 표시합니다.').replace(/<\//g,'<\\/');
+  const html=dashboardTemplate.replaceAll('__TITLE_TEXT__',`${title} · 데이터 대시보드`.replace(/[&<>]/g,(character)=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[character]))).replace('__DATA_JSON__',json).replace('__AI_ANALYSIS_JSON__',analysisJson);
   return{name:title+'.html',bytes:Buffer.from(html)};
 }

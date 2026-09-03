@@ -8,7 +8,7 @@ import { basename, dirname, extname, join, normalize, resolve, sep } from 'node:
 import { fileURLToPath } from 'node:url';
 import pg from 'pg';
 import { bucketEnabled, putObject } from './storage.mjs';
-import { cleanWorkbook, dashboardFromWorkbook } from './pipeline.mjs';
+import { cleanWorkbook, dashboardFromWorkbook, analysisInputFromWorkbook } from './pipeline.mjs';
 
 const PORT = Number(process.env.PORT || 4173);
 const TARGET_ITEM_COUNT = 112;
@@ -27,6 +27,18 @@ const { Pool } = pg;
 const databaseUrl = process.env.DATABASE_URL || '';
 const pool = databaseUrl ? new Pool({ connectionString: databaseUrl, max: 8, idleTimeoutMillis: 30_000, connectionTimeoutMillis: 10_000 }) : null;
 const databaseState = { enabled: Boolean(pool), connected: false, error: '' };
+
+async function createAiAnalysis(bytes,fileName,apiKey){
+  if(!apiKey)return '';
+  if(!/^sk-[A-Za-z0-9_-]{20,}$/.test(apiKey))throw new Error('OpenAI API 키 형식이 올바르지 않습니다. 설정을 확인해 주세요.');
+  const controller=new AbortController(),timer=setTimeout(()=>controller.abort(),60_000);
+  try{
+    const summary=analysisInputFromWorkbook(bytes,fileName);
+    const response=await fetch('https://api.openai.com/v1/responses',{method:'POST',signal:controller.signal,headers:{authorization:`Bearer ${apiKey}`,'content-type':'application/json'},body:JSON.stringify({model:process.env.OPENAI_MODEL||'gpt-5-mini',store:false,max_output_tokens:1200,instructions:'당신은 한국 대학 공시 데이터 분석가입니다. 제공된 집계값만 근거로 사용하고 추측하지 마세요. 한국어로 핵심 요약, 주요 관찰 3개, 해석 시 주의점 1개를 간결하게 작성하세요. 숫자는 읽기 쉽게 표시하세요.',input:JSON.stringify(summary)})});
+    const payload=await response.json().catch(()=>({}));if(!response.ok)throw new Error(payload?.error?.message||`OpenAI API 요청 실패 (HTTP ${response.status})`);
+    return payload.output_text||payload.output?.flatMap(item=>item.content||[]).filter(part=>part.type==='output_text').map(part=>part.text).join('\n')||'AI 분석 결과가 비어 있습니다.';
+  }catch(error){if(error.name==='AbortError')throw new Error('OpenAI 분석 시간이 초과되었습니다.');throw error;}finally{clearTimeout(timer);}
+}
 
 async function initializeDatabase() {
   if (!pool) return;
@@ -445,7 +457,7 @@ const server = http.createServer(async (req, res) => {
   try {
     res.setHeader('access-control-allow-origin', '*');
     res.setHeader('access-control-allow-methods', 'GET, POST, OPTIONS');
-    res.setHeader('access-control-allow-headers', 'content-type, x-openapi-key, x-file-name');
+    res.setHeader('access-control-allow-headers', 'content-type, x-openapi-key, x-openai-api-key, x-file-name');
     if (req.method === 'OPTIONS') {
       res.writeHead(204);
       return res.end();
@@ -472,7 +484,8 @@ const server = http.createServer(async (req, res) => {
     if (req.method === 'POST' && url.pathname === '/api/web/dashboard') {
       const fileName = decodeURIComponent(String(req.headers['x-file-name'] || 'clean.xlsx'));
       const source = await readBytes(req); validateXlsx(source, fileName); const id = randomUUID();
-      const result = await dashboardFromWorkbook(source, fileName);
+      const aiAnalysis=await createAiAnalysis(source,fileName,String(req.headers['x-openai-api-key']||'').trim());
+      const result = await dashboardFromWorkbook(source, fileName, aiAnalysis);
       const dashboardKey = `dashboard/${id}/${result.name}`;
       await persistStoredFile(id, 'dashboard', result.name, dashboardKey, result.bytes, 'text/html; charset=utf-8');
       res.writeHead(200, { 'content-type':'text/html; charset=utf-8', 'x-output-name':encodeURIComponent(result.name), 'content-length':result.bytes.length });

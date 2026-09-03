@@ -53,3 +53,7 @@ Railway 프로젝트에 PostgreSQL 서비스를 추가한 뒤 앱 서비스의 `
 `DATABASE_URL`이 없는 로컬 환경에서는 PostgreSQL 기능만 비활성화되고 기존 다운로드 기능은 그대로 동작합니다.
 
 웹 정제·대시보드 기능은 Railway Bucket의 `AWS_ENDPOINT_URL`, `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_REGION`, `BUCKET` 환경변수를 자동으로 사용합니다. Bucket이 없거나 저장에 실패하면 PostgreSQL의 `file_blobs` 테이블(`bytea`)로 자동 대체하며, PostgreSQL도 없는 로컬 환경에서는 결과를 브라우저에 직접 반환합니다. 따라서 외부 저장소 설정 때문에 정제·대시보드 생성이 중단되지 않습니다. `stored_files` 테이블에는 단계, 파일명, 객체 키와 크기를 기록합니다. HTTPS 환경에서는 Chrome 또는 Edge의 폴더 접근 기능으로 원본 파일을 읽고 결과를 선택 폴더 아래 `정제`, `대시보드` 폴더에 다시 저장합니다.
+
+## OpenAI 텍스트 분석
+
+앱의 **설정 → OpenAI API 키**에 사용자가 직접 키를 입력하면 대시보드 생성 요청에만 HTTPS 헤더로 Railway 서버에 전달됩니다. 서버는 Responses API로 정제 데이터의 집계 요약을 분석하며, API 키 자체는 PostgreSQL, Bucket, 로그 또는 생성 HTML에 저장하지 않습니다. 생성 HTML에는 AI 분석 결과 텍스트만 포함됩니다. 키가 없으면 기존 규칙 기반 요약만 표시됩니다. 기본 모델은 `gpt-5-mini`이며 Railway의 `OPENAI_MODEL` 환경변수로 변경할 수 있습니다.

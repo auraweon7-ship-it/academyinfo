@@ -4,7 +4,7 @@ const SETTINGS_KEY = 'academy-data-settings-v1';
 const CHECKPOINT_KEY = 'academy-data-checkpoint-v1';
 const HISTORY_KEY = 'academy-data-history-v1';
 const savedSettings = (() => { try { return JSON.parse(localStorage.getItem(SETTINGS_KEY) || '{}'); } catch { return {}; } })();
-const state = { items: [], filtered: [], downloading: false, downloadCancelled: false, downloadController: null, scanController: null, directoryHandle: null, browserDownloadFallback: false, folderToken: null, folderPath: '', cleanFolderToken: null, cleanFolderPath: '', cleanDirectoryHandle: null, cleaning: false, cleanOperationId: null, cleanController: null, dashboardFolderToken: null, dashboardFolderPath: '', dashboardDirectoryHandle: null, dashboarding: false, dashboardOperationId: null, dashboardController: null, settings: { openApiKey: savedSettings.openApiKey || '', apiServerUrl: savedSettings.apiServerUrl || '' } };
+const state = { items: [], filtered: [], downloading: false, downloadCancelled: false, downloadController: null, scanController: null, directoryHandle: null, browserDownloadFallback: false, folderToken: null, folderPath: '', cleanFolderToken: null, cleanFolderPath: '', cleanDirectoryHandle: null, cleaning: false, cleanOperationId: null, cleanController: null, dashboardFolderToken: null, dashboardFolderPath: '', dashboardDirectoryHandle: null, dashboarding: false, dashboardOperationId: null, dashboardController: null, settings: { openApiKey: savedSettings.openApiKey || '', openAiApiKey: savedSettings.openAiApiKey || '', apiServerUrl: savedSettings.apiServerUrl || '' } };
 
 function readLocal(key, fallback) { try { return JSON.parse(localStorage.getItem(key) || '') || fallback; } catch { return fallback; } }
 function writeLocal(key, value) { try { localStorage.setItem(key, JSON.stringify(value)); } catch {} }
@@ -33,10 +33,10 @@ const apiUrl = (path) => {
   if (customServer) return `${customServer}${path}`;
   return location.protocol === 'file:' ? `http://localhost:4173${path}` : path;
 };
-const apiHeaders = (headers = {}) => state.settings.openApiKey ? { ...headers, 'x-openapi-key': state.settings.openApiKey } : headers;
+const apiHeaders = (path, headers = {}) => ({ ...headers, ...(state.settings.openApiKey ? {'x-openapi-key':state.settings.openApiKey}:{}), ...(path==='/api/web/dashboard'&&state.settings.openAiApiKey ? {'x-openai-api-key':state.settings.openAiApiKey}:{}) });
 async function requestApi(path, options = {}) {
   try {
-    return await fetch(apiUrl(path), { ...options, headers: apiHeaders(options.headers) });
+    return await fetch(apiUrl(path), { ...options, headers: apiHeaders(path, options.headers) });
   } catch (error) {
     if (error.name === 'AbortError') throw error;
     throw new Error('로컬 앱 서버에 연결할 수 없습니다. start.cmd를 실행한 뒤 다시 시도해 주세요.');
@@ -84,12 +84,13 @@ function initializeHeroCarousel() {
 }
 
 function updateSettingsIndicator() {
-  $('#settingsButton').classList.toggle('configured', Boolean(state.settings.openApiKey));
-  $('#settingsButton').title = state.settings.openApiKey ? 'OpenAPI 인증키가 설정되어 있습니다.' : '연결 설정';
+  $('#settingsButton').classList.toggle('configured', Boolean(state.settings.openApiKey || state.settings.openAiApiKey));
+  $('#settingsButton').title = state.settings.openAiApiKey ? 'OpenAI 분석 기능이 설정되어 있습니다.' : '연결 설정';
 }
 
 function openSettings() {
   $('#openApiKey').value = state.settings.openApiKey;
+  $('#openAiApiKey').value = state.settings.openAiApiKey;
   $('#apiServerUrl').value = state.settings.apiServerUrl;
   $('#openApiKey').type = 'password';
   $('#toggleApiKey').textContent = '표시';
@@ -102,6 +103,7 @@ function openSettings() {
 function saveSettings(event) {
   event.preventDefault();
   const openApiKey = $('#openApiKey').value.trim();
+  const openAiApiKey = $('#openAiApiKey').value.trim();
   let apiServerUrl = $('#apiServerUrl').value.trim().replace(/\/$/, '');
   if (apiServerUrl) {
     try {
@@ -114,17 +116,18 @@ function saveSettings(event) {
       return;
     }
   }
-  state.settings = { openApiKey, apiServerUrl };
+  state.settings = { openApiKey, openAiApiKey, apiServerUrl };
   localStorage.setItem(SETTINGS_KEY, JSON.stringify(state.settings));
   updateSettingsIndicator();
   $('#settingsDialog').close();
-  toast(openApiKey ? 'OpenAPI 설정을 저장했습니다.' : '연결 설정을 저장했습니다.');
+  toast(openAiApiKey ? 'OpenAI 대시보드 분석 설정을 저장했습니다.' : openApiKey ? 'OpenAPI 설정을 저장했습니다.' : '연결 설정을 저장했습니다.');
 }
 
 function clearSettings() {
-  state.settings = { openApiKey: '', apiServerUrl: '' };
+  state.settings = { openApiKey: '', openAiApiKey: '', apiServerUrl: '' };
   localStorage.removeItem(SETTINGS_KEY);
   $('#openApiKey').value = '';
+  $('#openAiApiKey').value = '';
   $('#apiServerUrl').value = '';
   updateSettingsIndicator();
   $('#settingsMessage').className = 'settings-message';
