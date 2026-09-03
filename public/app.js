@@ -337,6 +337,7 @@ async function downloadAll() {
   $('#downloadButton').disabled = true;
   const groups = batches(state.items);
   let completed = 0;
+  let completedItems = 0;
   try {
     for (let index = 0; index < groups.length; index++) {
       if (state.downloadCancelled) throw new DOMException('다운로드 중단', 'AbortError');
@@ -349,7 +350,9 @@ async function downloadAll() {
       link.href = href; link.download = `대학알리미_${group[0].schoolName}_${String(index + 1).padStart(2, '0')}.zip`;
       document.body.append(link); link.click(); link.remove();
       setTimeout(() => URL.revokeObjectURL(href), 5000);
-      completed++;
+      completed++; completedItems += group.length;
+      $('#dockStatus').textContent = `ZIP 다운로드 누적 ${completedItems} / ${state.items.length}개`;
+      $('#dockDetail').textContent = `${completed} / ${groups.length}개 ZIP 묶음을 내려받았습니다.`;
       if (index < groups.length - 1) await new Promise((resolve) => setTimeout(resolve, 450));
     }
     $('#dockStatus').textContent = '다운로드 완료';
@@ -459,10 +462,11 @@ async function saveUncompressed() {
       if (state.downloadCancelled) throw new DOMException('다운로드 중단', 'AbortError');
       if (completedGroups.has(index)) continue;
       const group = groups[index];
-      $('#dockStatus').textContent = `압축 없이 저장 ${index + 1} / ${groups.length}`;
+      $('#dockStatus').textContent = `다운로드 누적 ${savedFiles} / ${state.items.length}개 · 묶음 ${index + 1} / ${groups.length}`;
       $('#dockDetail').textContent = `${group[0].schoolName} 자료를 받아 선택한 폴더에 풀고 있습니다.`;
       try { if (state.folderToken) {
         const data = await saveBatchToSelectedFolder(group, `${runId}-${group[0].schoolCode}-${index}`); savedFiles += data.count;
+        $('#dockStatus').textContent = `다운로드 누적 ${savedFiles} / ${state.items.length}개`;
       } else if (state.browserDownloadFallback) {
         const entries = await extractZip(await fetchZip(group));
         for (const entry of entries) {
@@ -474,12 +478,14 @@ async function saveUncompressed() {
           document.body.append(link); link.click(); link.remove();
           setTimeout(() => URL.revokeObjectURL(href), 5000);
           savedFiles++;
+          $('#dockStatus').textContent = `다운로드 누적 ${savedFiles} / ${state.items.length}개`;
         }
       } else {
         const entries = await extractZip(await fetchZip(group));
         for (const entry of entries) {
           await writeEntry(state.directoryHandle, entry, usedNames);
           savedFiles++;
+          $('#dockStatus').textContent = `다운로드 누적 ${savedFiles} / ${state.items.length}개`;
         }
       }
       completedGroups.add(index);
@@ -490,7 +496,7 @@ async function saveUncompressed() {
     }
     const done = failedGroups.length === 0;
     writeLocal(CHECKPOINT_KEY, { signature, runId, completed:[...completedGroups], failed:failedGroups, total:groups.length, done, updatedAt:new Date().toISOString() }); updateResumeUi();
-    $('#dockStatus').textContent = done ? '개별 파일 저장 완료' : `${failedGroups.length}개 묶음 재시도 필요`;
+    $('#dockStatus').textContent = done ? `개별 파일 저장 완료 · 누적 ${savedFiles}개` : `누적 ${savedFiles}개 · ${failedGroups.length}개 묶음 재시도 필요`;
     $('#dockDetail').textContent = `${state.folderPath || state.directoryHandle?.name}에 ${savedFiles}개 파일을 저장했습니다.${done ? ' ZIP 파일은 남기지 않았습니다.' : ' 운영 센터에서 실패 묶음을 재시도하세요.'}`;
     addHistory('1단계 다운로드', done ? '완료' : '부분 완료', `${savedFiles}개 저장 · 실패 묶음 ${failedGroups.length}개`);
     toast(done ? '선택한 폴더에 개별 파일 저장을 완료했습니다.' : '가능한 파일을 저장했습니다. 실패 묶음은 이어받을 수 있습니다.');
