@@ -4,7 +4,7 @@ const SETTINGS_KEY = 'academy-data-settings-v1';
 const CHECKPOINT_KEY = 'academy-data-checkpoint-v1';
 const HISTORY_KEY = 'academy-data-history-v1';
 const savedSettings = (() => { try { return JSON.parse(localStorage.getItem(SETTINGS_KEY) || '{}'); } catch { return {}; } })();
-const state = { items: [], filtered: [], downloading: false, downloadCancelled: false, downloadController: null, scanController: null, directoryHandle: null, browserDownloadFallback: false, folderToken: null, folderPath: '', cleanFolderToken: null, cleanFolderPath: '', cleanDirectoryHandle: null, cleaning: false, cleanOperationId: null, cleanController: null, dashboardFolderToken: null, dashboardFolderPath: '', dashboardDirectoryHandle: null, dashboarding: false, dashboardOperationId: null, dashboardController: null, settings: { openApiKey: savedSettings.openApiKey || '', openAiApiKey: savedSettings.openAiApiKey || '', apiServerUrl: savedSettings.apiServerUrl || '' } };
+const state = { items: [], filtered: [], downloading: false, downloadCancelled: false, downloadController: null, scanController: null, directoryHandle: null, browserDownloadFallback: false, folderToken: null, folderPath: '', cleanFolderToken: null, cleanFolderPath: '', cleanDirectoryHandle: null, cleanFolderExplicit: false, cleaning: false, cleanOperationId: null, cleanController: null, dashboardFolderToken: null, dashboardFolderPath: '', dashboardDirectoryHandle: null, dashboardFolderExplicit: false, dashboarding: false, dashboardOperationId: null, dashboardController: null, settings: { openApiKey: savedSettings.openApiKey || '', openAiApiKey: savedSettings.openAiApiKey || '', apiServerUrl: savedSettings.apiServerUrl || '' } };
 
 function readLocal(key, fallback) { try { return JSON.parse(localStorage.getItem(key) || '') || fallback; } catch { return fallback; } }
 function writeLocal(key, value) { try { localStorage.setItem(key, JSON.stringify(value)); } catch {} }
@@ -147,6 +147,12 @@ function setFolderDownloadEnabled(enabled) {
   button.disabled = !enabled;
   button.toggleAttribute('disabled', !enabled);
   button.setAttribute('aria-disabled', String(!enabled));
+}
+
+function applyStageOneFolderDefaults() {
+  const name=state.folderPath||state.directoryHandle?.name;if(!name)return;
+  if(!state.cleanFolderExplicit){state.cleanDirectoryHandle=state.directoryHandle;state.cleanFolderToken=state.folderToken;state.cleanFolderPath=name;$('#cleanFolderPath').textContent=`${name} (1단계 폴더)`;$('#cleanFolderPath').title=name;$('#cleanFolderButton').firstChild.textContent='원본 폴더 변경 ';$('#cleanStartButton').disabled=false;setCleanStatus('','1단계 폴더 자동 선택',`${name} 하위에 정제 폴더를 생성합니다.`);}
+  if(!state.dashboardFolderExplicit){state.dashboardDirectoryHandle=state.directoryHandle;state.dashboardFolderToken=state.folderToken;state.dashboardFolderPath=name;$('#dashboardFolderPath').textContent=`${name} (1단계 폴더)`;$('#dashboardFolderPath').title=name;$('#dashboardFolderButton').firstChild.textContent='원본 폴더 변경 ';$('#dashboardStartButton').disabled=false;setDashboardStatus('','1단계 폴더 자동 선택',`${name} 하위의 정제 폴더를 사용하고 대시보드 폴더를 생성합니다.`);}
 }
 
 async function fetchZip(group) {
@@ -386,6 +392,7 @@ async function selectDirectory() {
       setFolderDownloadEnabled(true);
       $('#dockStatus').textContent = '저장 폴더 지정 완료';
       $('#dockDetail').textContent = `${handle.name} 폴더에 압축 없이 개별 파일로 저장합니다.`;
+      applyStageOneFolderDefaults();
       toast('저장 폴더가 지정되었습니다. 다운로드 버튼을 눌러 주세요.');
       return;
     }
@@ -403,6 +410,7 @@ async function selectDirectory() {
     setFolderDownloadEnabled(true);
     $('#dockStatus').textContent = '저장 폴더 지정 완료';
     $('#dockDetail').textContent = `${data.path}에 압축 없이 개별 파일로 저장합니다.`;
+    applyStageOneFolderDefaults();
     toast('저장 폴더가 지정되었습니다. 다운로드 버튼을 눌러 주세요.');
   } catch (error) {
     if (error.name === 'AbortError') return;
@@ -509,7 +517,7 @@ async function selectCleanFolder() {
     if (location.protocol === 'https:') {
       if (!('showDirectoryPicker' in window)) throw new Error('최신 Chrome 또는 Edge에서 폴더를 선택해 주세요.');
       const handle = await window.showDirectoryPicker({ id:'academy-clean-source', mode:'readwrite' });
-      state.cleanDirectoryHandle = handle; state.cleanFolderPath = handle.name; state.cleanFolderToken = null;
+      state.cleanDirectoryHandle = handle; state.cleanFolderPath = handle.name; state.cleanFolderToken = null; state.cleanFolderExplicit = true;
       button.firstChild.textContent = '원본 폴더 변경 '; $('#cleanFolderPath').textContent = handle.name; $('#cleanStartButton').disabled = false;
       setCleanStatus('', '웹 정제 준비 완료', `${handle.name}의 Excel 파일을 Railway에서 정제합니다.`); return;
     }
@@ -519,6 +527,7 @@ async function selectCleanFolder() {
     if (data.cancelled) return;
     state.cleanFolderToken = data.token;
     state.cleanFolderPath = data.path;
+    state.cleanFolderExplicit = true;
     button.firstChild.textContent = '원본 폴더 변경 ';
     $('#cleanFolderPath').textContent = data.path;
     $('#cleanFolderPath').title = data.path;
@@ -604,10 +613,11 @@ async function selectDashboardFolder() {
   const button = $('#dashboardFolderButton');
   try {
     button.disabled = true; button.firstChild.textContent = '폴더 선택 창 여는 중 ';
-    if(location.protocol==='https:'){if(!('showDirectoryPicker' in window))throw new Error('최신 Chrome 또는 Edge에서 폴더를 선택해 주세요.');const handle=await window.showDirectoryPicker({id:'academy-dashboard-source',mode:'readwrite'});state.dashboardDirectoryHandle=handle;state.dashboardFolderPath=handle.name;state.dashboardFolderToken=null;button.firstChild.textContent='원본 폴더 변경 ';$('#dashboardFolderPath').textContent=handle.name;$('#dashboardStartButton').disabled=false;setDashboardStatus('','생성 준비 완료',`${handle.name}의 정제 파일로 생성합니다.`);return;}
+    if(location.protocol==='https:'){if(!('showDirectoryPicker' in window))throw new Error('최신 Chrome 또는 Edge에서 폴더를 선택해 주세요.');const handle=await window.showDirectoryPicker({id:'academy-dashboard-source',mode:'readwrite'});state.dashboardDirectoryHandle=handle;state.dashboardFolderPath=handle.name;state.dashboardFolderToken=null;state.dashboardFolderExplicit=true;button.firstChild.textContent='원본 폴더 변경 ';$('#dashboardFolderPath').textContent=handle.name;$('#dashboardStartButton').disabled=false;setDashboardStatus('','생성 준비 완료',`${handle.name}의 정제 파일로 생성합니다.`);return;}
     const response = await requestApi('/api/select-dashboard-folder', { method: 'POST' }); const data = await readApiJson(response);
     if (!response.ok) throw new Error(data.error); if (data.cancelled) return;
     state.dashboardFolderToken = data.token; state.dashboardFolderPath = data.path;
+    state.dashboardFolderExplicit = true;
     button.firstChild.textContent = '원본 폴더 변경 '; $('#dashboardFolderPath').textContent = data.path; $('#dashboardFolderPath').title = data.path;
     $('#dashboardStartButton').disabled = false; setDashboardStatus('', '생성 준비 완료', `${data.path}의 정제 파일로 대시보드를 만듭니다.`);
   } catch (error) { setDashboardStatus('error', '폴더 선택 실패', error.message || '폴더를 선택할 수 없습니다.'); }
