@@ -1,8 +1,30 @@
 const $ = (selector) => document.querySelector(selector);
 const $$ = (selector) => [...document.querySelectorAll(selector)];
 const SETTINGS_KEY = 'academy-data-settings-v1';
+const CHECKPOINT_KEY = 'academy-data-checkpoint-v1';
+const HISTORY_KEY = 'academy-data-history-v1';
 const savedSettings = (() => { try { return JSON.parse(localStorage.getItem(SETTINGS_KEY) || '{}'); } catch { return {}; } })();
 const state = { items: [], filtered: [], downloading: false, downloadCancelled: false, downloadController: null, scanController: null, directoryHandle: null, browserDownloadFallback: false, folderToken: null, folderPath: '', cleanFolderToken: null, cleanFolderPath: '', cleanDirectoryHandle: null, cleaning: false, cleanOperationId: null, cleanController: null, dashboardFolderToken: null, dashboardFolderPath: '', dashboardDirectoryHandle: null, dashboarding: false, dashboardOperationId: null, dashboardController: null, settings: { openApiKey: savedSettings.openApiKey || '', apiServerUrl: savedSettings.apiServerUrl || '' } };
+
+function readLocal(key, fallback) { try { return JSON.parse(localStorage.getItem(key) || '') || fallback; } catch { return fallback; } }
+function writeLocal(key, value) { try { localStorage.setItem(key, JSON.stringify(value)); } catch {} }
+function addHistory(stage, status, detail) {
+  const history = readLocal(HISTORY_KEY, []);
+  history.unshift({ id: crypto.randomUUID(), at: new Date().toISOString(), stage, status, detail });
+  writeLocal(HISTORY_KEY, history.slice(0, 30)); renderHistory();
+}
+function renderHistory() {
+  const node = $('#operationHistory'); if (!node) return;
+  const history = readLocal(HISTORY_KEY, []);
+  node.innerHTML = history.length ? history.map(item => `<div class="history-row ${item.status === '실패' ? 'error' : ''}"><time>${new Date(item.at).toLocaleString('ko-KR')}</time><strong>${escapeHtml(item.stage)}</strong><span>${escapeHtml(item.status)}</span><p>${escapeHtml(item.detail)}</p></div>`).join('') : '<p class="empty-history">아직 실행한 작업이 없습니다.</p>';
+}
+function checkpointSignature() { return `${state.folderPath || state.directoryHandle?.name || 'default'}:` + selectedSchools().sort().join(',') + ':' + state.items.map(item => `${item.schoolCode}-${item.id || item.itemId || item.name}`).join('|'); }
+function updateResumeUi() {
+  const checkpoint = readLocal(CHECKPOINT_KEY, null), button = $('#resumeButton'), summary = $('#resumeSummary'); if (!button || !summary) return;
+  if (!checkpoint || checkpoint.done) { summary.textContent = '저장된 체크포인트가 없습니다.'; button.disabled = true; return; }
+  summary.textContent = `${checkpoint.completed.length}/${checkpoint.total}개 묶음 완료 · ${checkpoint.failed.length}개 재시도 대기`;
+  button.disabled = false;
+}
 const LOCAL_FOLDER_APIS = new Set(['/api/select-folder', '/api/save-files', '/api/select-clean-folder', '/api/clean-folder', '/api/select-dashboard-folder', '/api/list-dashboard-files', '/api/create-dashboards', '/api/cancel-operation']);
 const apiUrl = (path) => {
   const pathname = path.split('?')[0];
@@ -408,17 +430,21 @@ async function saveUncompressed() {
   const legacyZipButton = $('#zipButton');
   zipButton.disabled = true; folderButton.disabled = true; legacyZipButton.disabled = true;
   const groups = batches(state.items);
+  const signature = checkpointSignature();
+  const previous = readLocal(CHECKPOINT_KEY, null);
+  const completedGroups = new Set(previous?.signature === signature ? previous.completed : []);
+  const failedGroups = [];
   const usedNames = new Map();
   let savedFiles = 0;
   try {
     for (let index = 0; index < groups.length; index++) {
       if (state.downloadCancelled) throw new DOMException('다운로드 중단', 'AbortError');
+      if (completedGroups.has(index)) continue;
       const group = groups[index];
       $('#dockStatus').textContent = `압축 없이 저장 ${index + 1} / ${groups.length}`;
       $('#dockDetail').textContent = `${group[0].schoolName} 자료를 받아 선택한 폴더에 풀고 있습니다.`;
-      if (state.folderToken) {
-        const data = await saveBatchToSelectedFolder(group, `${group[0].schoolCode}-${index}`);
-        savedFiles += data.count;
+      try { if (state.folderToken) {
+        const data = await saveBatchToSelectedFolder(group, `${group[0].schoolCode}-${index}`); savedFiles += data.count;
       } else if (state.browserDownloadFallback) {
         const entries = await extractZip(await fetchZip(group));
         for (const entry of entries) {
@@ -438,14 +464,22 @@ async function saveUncompressed() {
           savedFiles++;
         }
       }
+      completedGroups.add(index);
+      writeLocal(CHECKPOINT_KEY, { signature, completed:[...completedGroups], failed:failedGroups, total:groups.length, done:false, updatedAt:new Date().toISOString() });
+      updateResumeUi();
+      } catch (error) { if (error.name === 'AbortError') throw error; failedGroups.push(index); $('#dockDetail').textContent = `${index + 1}번 묶음 실패 — 나머지를 계속 저장합니다.`; }
       if (index < groups.length - 1) await new Promise((resolve) => setTimeout(resolve, 350));
     }
-    $('#dockStatus').textContent = '개별 파일 저장 완료';
-    $('#dockDetail').textContent = `${state.folderPath || state.directoryHandle?.name}에 ${savedFiles}개 파일을 저장했습니다. ZIP 파일은 남기지 않았습니다.`;
-    toast('선택한 폴더에 개별 파일 저장을 완료했습니다.');
+    const done = failedGroups.length === 0;
+    writeLocal(CHECKPOINT_KEY, { signature, completed:[...completedGroups], failed:failedGroups, total:groups.length, done, updatedAt:new Date().toISOString() }); updateResumeUi();
+    $('#dockStatus').textContent = done ? '개별 파일 저장 완료' : `${failedGroups.length}개 묶음 재시도 필요`;
+    $('#dockDetail').textContent = `${state.folderPath || state.directoryHandle?.name}에 ${savedFiles}개 파일을 저장했습니다.${done ? ' ZIP 파일은 남기지 않았습니다.' : ' 운영 센터에서 실패 묶음을 재시도하세요.'}`;
+    addHistory('1단계 다운로드', done ? '완료' : '부분 완료', `${savedFiles}개 저장 · 실패 묶음 ${failedGroups.length}개`);
+    toast(done ? '선택한 폴더에 개별 파일 저장을 완료했습니다.' : '가능한 파일을 저장했습니다. 실패 묶음은 이어받을 수 있습니다.');
   } catch (error) {
     $('#dockStatus').textContent = error.name === 'AbortError' ? '사용자가 다운로드를 중단했습니다' : '개별 파일 저장 중단';
     $('#dockDetail').textContent = `${savedFiles}개 저장 · ${error.name === 'AbortError' ? '중단 요청이 적용되었습니다.' : error.message || '오류가 발생했습니다.'}`;
+    addHistory('1단계 다운로드', error.name === 'AbortError' ? '중단' : '실패', `${savedFiles}개 저장 · ${error.message || ''}`);
   } finally {
     state.downloading = false; state.downloadController = null; showStop('#downloadStopButton', false); setRunning('#step-download', false); setRunning('#downloadDock', false); setFolderDownloadEnabled(true); folderButton.disabled = false; legacyZipButton.disabled = false;
   }
@@ -498,6 +532,10 @@ function renderCleanResults(result) {
     ? `<div class="clean-file-row"><strong>${escapeHtml(file.file)}</strong><span>${file.before.toLocaleString('ko-KR')} → ${file.after.toLocaleString('ko-KR')}행</span><span>${file.merged.toLocaleString('ko-KR')}행 통합</span></div>`
     : `<div class="clean-file-row error"><strong>${escapeHtml(file.file)}</strong><span>실패</span><span>${escapeHtml(file.error || '')}</span></div>`).join('');
   container.innerHTML = `<div class="clean-result-summary"><div><strong>${result.success}</strong><span> / ${result.total}개 파일 완료</span></div><span>저장 위치: ${escapeHtml(result.output)}</span></div><div class="clean-file-list">${rows}</div>`;
+  const rate = result.total ? Math.round(result.success / result.total * 100) : 0;
+  $('#qualitySummary').textContent = `정제 성공률 ${rate}% · 성공 ${result.success}개 · 오류 ${result.failed || 0}개`;
+  $('#qualityMeter i').style.width = `${rate}%`;
+  addHistory('2단계 정제', result.failed ? '부분 완료' : '완료', `${result.success}/${result.total}개 · 품질 성공률 ${rate}%`);
 }
 
 async function startCleaning() {
@@ -575,7 +613,7 @@ async function startDashboard() {
   start.querySelector('span').textContent = '대시보드 생성 중'; $('#dashboardResults').classList.add('hidden');
   setDashboardStatus('running', '정제 데이터 분석 중', '파일 수와 데이터 행 수에 따라 시간이 걸릴 수 있습니다.');
   try {
-    if(state.dashboardDirectoryHandle){let input=state.dashboardDirectoryHandle;try{input=await input.getDirectoryHandle('정제')}catch{}const files=[];for await(const entry of input.values())if(entry.kind==='file'&&/\.xlsx$/i.test(entry.name)&&!entry.name.startsWith('~$'))files.push(entry);if(!files.length)throw new Error('정제 Excel 파일이 없습니다.');const output=await state.dashboardDirectoryHandle.getDirectoryHandle('대시보드',{create:true});const made=[];for(let i=0;i<files.length;i++){const file=await files[i].getFile();setDashboardStatus('running',`대시보드 ${i+1} / ${files.length}`,file.name);const response=await requestApi('/api/web/dashboard',{method:'POST',headers:{'content-type':'application/octet-stream','x-file-name':encodeURIComponent(file.name)},body:file,signal:state.dashboardController.signal});if(!response.ok)throw new Error((await readApiJson(response)).error);const name=decodeURIComponent(response.headers.get('x-output-name')||file.name.replace(/\.xlsx$/i,'.html'));const target=await output.getFileHandle(name,{create:true});const writable=await target.createWritable();await writable.write(await response.blob());await writable.close();made.push(name)}const result=$('#dashboardResults');result.classList.remove('hidden');result.innerHTML=`<div class="clean-result-summary"><div><strong>${made.length}</strong><span>개 HTML 생성 완료</span></div><span>저장 위치: ${escapeHtml(state.dashboardDirectoryHandle.name)}/대시보드</span></div>`;setDashboardStatus('success',`${made.length}개 대시보드 생성 완료`,'대시보드 폴더에 저장했습니다.');return;}
+    if(state.dashboardDirectoryHandle){let input=state.dashboardDirectoryHandle;try{input=await input.getDirectoryHandle('정제')}catch{}const files=[];for await(const entry of input.values())if(entry.kind==='file'&&/\.xlsx$/i.test(entry.name)&&!entry.name.startsWith('~$'))files.push(entry);if(!files.length)throw new Error('정제 Excel 파일이 없습니다.');const output=await state.dashboardDirectoryHandle.getDirectoryHandle('대시보드',{create:true});const made=[];for(let i=0;i<files.length;i++){const file=await files[i].getFile();setDashboardStatus('running',`대시보드 ${i+1} / ${files.length}`,file.name);const response=await requestApi('/api/web/dashboard',{method:'POST',headers:{'content-type':'application/octet-stream','x-file-name':encodeURIComponent(file.name)},body:file,signal:state.dashboardController.signal});if(!response.ok)throw new Error((await readApiJson(response)).error);const name=decodeURIComponent(response.headers.get('x-output-name')||file.name.replace(/\.xlsx$/i,'.html'));const target=await output.getFileHandle(name,{create:true});const writable=await target.createWritable();await writable.write(await response.blob());await writable.close();made.push(name)}const result=$('#dashboardResults');result.classList.remove('hidden');result.innerHTML=`<div class="clean-result-summary"><div><strong>${made.length}</strong><span>개 HTML 생성 완료</span></div><span>저장 위치: ${escapeHtml(state.dashboardDirectoryHandle.name)}/대시보드</span></div>`;setDashboardStatus('success',`${made.length}개 대시보드 생성 완료`,'대시보드 폴더에 저장했습니다.');addHistory('3단계 대시보드','완료',`${made.length}개 HTML 생성`);return;}
     const mode = $('input[name="dashboardMode"]:checked').value;
     let data;
     if (mode === 'individual') {
@@ -598,8 +636,8 @@ async function startDashboard() {
     }
     const result = $('#dashboardResults'); result.classList.remove('hidden');
     result.innerHTML = `<div class="clean-result-summary"><div><strong>${data.count}</strong><span>개 HTML 생성 완료</span></div><span>저장 위치: ${escapeHtml(data.output)}</span></div><div class="clean-file-list">${data.files.map(file=>`<div class="clean-file-row"><strong>${escapeHtml(file)}</strong><span>대시보드</span><span>생성 완료</span></div>`).join('')}</div>`;
-    setDashboardStatus('success', `${data.count}개 대시보드 생성 완료`, `${data.output}에 HTML 문서를 저장했습니다.`); toast('데이터 대시보드 생성이 완료되었습니다.');
-  } catch(error) { if(error.name==='AbortError') setDashboardStatus('', '대시보드 생성 중단', '사용자 요청으로 생성을 중단했습니다.'); else setDashboardStatus('error', '대시보드 생성 실패', error.message || 'HTML을 생성하지 못했습니다.'); }
+    setDashboardStatus('success', `${data.count}개 대시보드 생성 완료`, `${data.output}에 HTML 문서를 저장했습니다.`); addHistory('3단계 대시보드', '완료', `${data.count}개 HTML 생성`); toast('데이터 대시보드 생성이 완료되었습니다.');
+  } catch(error) { if(error.name==='AbortError') setDashboardStatus('', '대시보드 생성 중단', '사용자 요청으로 생성을 중단했습니다.'); else setDashboardStatus('error', '대시보드 생성 실패', error.message || 'HTML을 생성하지 못했습니다.'); addHistory('3단계 대시보드', error.name==='AbortError'?'중단':'실패', error.message || 'HTML 생성 실패'); }
   finally { state.dashboarding=false; state.dashboardOperationId=null; state.dashboardController=null; showStop('#dashboardStopButton',false); start.disabled=false; folder.disabled=false; start.querySelector('span').textContent='다시 생성'; }
 }
 
@@ -607,6 +645,29 @@ function stopDownload() { if (!state.downloading) return; state.downloadCancelle
 function stopScan() { state.scanController?.abort(); }
 async function stopCleaning() { const id=state.cleanOperationId; state.cleanController?.abort(); setCleanStatus('', '정제 중단 중', '실행 중인 Excel 작업을 종료하고 있습니다.'); await cancelServerOperation(id); }
 async function stopDashboard() { const id=state.dashboardOperationId; state.dashboardController?.abort(); setDashboardStatus('', '생성 중단 중', '실행 중인 대시보드 작업을 종료하고 있습니다.'); await cancelServerOperation(id); }
+
+async function runFullPipeline() {
+  const button=$('#pipelineButton'); if(state.downloading||state.cleaning||state.dashboarding)return;
+  try {
+    button.disabled=true; button.textContent='전체 작업 진행 중'; setRunning('#step-operations',true);
+    if(!state.directoryHandle){await selectDirectory();if(!state.directoryHandle)throw new Error('원클릭 실행은 Chrome 또는 Edge에서 선택 폴더 저장을 사용해 주세요.');}
+    if(!state.items.length && !(await scan()))throw new Error('수집 항목 조회에 실패했습니다.');
+    await saveUncompressed();
+    const checkpoint=readLocal(CHECKPOINT_KEY,null);if(!checkpoint?.done)throw new Error('다운로드 실패 묶음이 남아 있어 정제를 시작하지 않았습니다.');
+    state.cleanDirectoryHandle=state.directoryHandle;state.cleanFolderPath=state.directoryHandle.name;$('#cleanFolderPath').textContent=state.directoryHandle.name;$('#cleanStartButton').disabled=false;
+    await startCleaning();
+    if($('#cleanStatus').classList.contains('error'))throw new Error('정제 단계에 오류 파일이 있어 전체 작업을 중단했습니다.');
+    state.dashboardDirectoryHandle=state.directoryHandle;state.dashboardFolderPath=state.directoryHandle.name;$('#dashboardFolderPath').textContent=state.directoryHandle.name;$('#dashboardStartButton').disabled=false;
+    await startDashboard();if($('#dashboardStatus').classList.contains('error'))throw new Error('대시보드 생성 단계가 실패했습니다.');addHistory('전체 파이프라인','완료','다운로드 → 정제 → 대시보드 순차 실행');toast('전체 파이프라인 실행을 마쳤습니다.');
+  } catch(error){addHistory('전체 파이프라인','실패',error.message||'작업 실패');toast(error.message||'전체 작업을 완료하지 못했습니다.');}
+  finally{button.disabled=false;button.textContent='전체 작업 시작';setRunning('#step-operations',false);}
+}
+
+async function resumeDownload(){
+  if(!state.items.length){const ok=await scan();if(!ok)return;}
+  if(!state.directoryHandle&&!state.folderToken&&!state.browserDownloadFallback)await selectDirectory();
+  await saveUncompressed();
+}
 
 $('#scanButton').addEventListener('click', scan);
 $('#downloadButton').addEventListener('click', saveUncompressed);
@@ -620,6 +681,9 @@ $('#scanStopButton').addEventListener('click', stopScan);
 $('#downloadStopButton').addEventListener('click', stopDownload);
 $('#cleanStopButton').addEventListener('click', stopCleaning);
 $('#dashboardStopButton').addEventListener('click', stopDashboard);
+$('#resumeButton').addEventListener('click', resumeDownload);
+$('#pipelineButton').addEventListener('click', runFullPipeline);
+$('#clearHistoryButton').addEventListener('click', () => { localStorage.removeItem(HISTORY_KEY); renderHistory(); toast('작업 이력을 지웠습니다.'); });
 $('#settingsButton').addEventListener('click', openSettings);
 $('#settingsCloseButton').addEventListener('click', () => $('#settingsDialog').close());
 $('#settingsForm').addEventListener('submit', saveSettings);
@@ -635,6 +699,8 @@ $('#settingsDialog').addEventListener('click', (event) => {
   if (event.target === $('#settingsDialog')) $('#settingsDialog').close();
 });
 updateSettingsIndicator();
+renderHistory();
+updateResumeUi();
 initializeHeroCarousel();
 $('#selectAllSchools').addEventListener('click', () => {
   $$('.school-grid input').forEach((input) => { input.checked = true; });

@@ -12,7 +12,7 @@
   <header class="topbar">
     <a class="brand" href="/" aria-label="첫 화면">
       <span class="brand-mark" aria-hidden="true"><svg viewBox="0 0 48 48" role="img"><path class="logo-cap" d="m5 17 19-9 19 9-19 9L5 17Z"/><path class="logo-tassel" d="M39 19v10m0 0-3 5h6l-3-5Z"/><path class="logo-book" d="M10 27c5 0 10 1.5 14 5 4-3.5 9-5 14-5v12c-5 0-10 1.2-14 4-4-2.8-9-4-14-4V27Zm14 5v11"/></svg></span>
-      <span class="brand-copy"><strong>ACADEMY DATA</strong><small data-app-version>v.1.0.8</small></span>
+      <span class="brand-copy"><strong>ACADEMY DATA</strong><small data-app-version>v.1.1.0</small></span>
     </a>
     <div class="topbar-actions">
       <button id="settingsButton" class="settings-button" type="button" aria-haspopup="dialog" aria-controls="settingsDialog"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 15.25A3.25 3.25 0 1 0 12 8.75a3.25 3.25 0 0 0 0 6.5Z"/><path d="M19.4 13.5c.04-.49.04-1.01 0-1.5l2-1.55-2-3.46-2.47.99a8.22 8.22 0 0 0-2.6-1.5L14 3.84h-4l-.34 2.64a8.22 8.22 0 0 0-2.59 1.5L4.6 6.99l-2 3.46L4.6 12a9.3 9.3 0 0 0 0 1.5l-2 1.55 2 3.46 2.47-.99a8.22 8.22 0 0 0 2.6 1.5l.33 2.64h4l.34-2.64a8.22 8.22 0 0 0 2.59-1.5l2.47.99 2-3.46-2-1.55Z"/></svg><span>설정</span><i id="settingsIndicator" aria-hidden="true"></i></button>
@@ -27,6 +27,8 @@
       <a href="#step-clean"><span>02</span><strong>데이터 정제</strong></a>
       <span class="step-rail"></span>
       <a href="#step-dashboard"><span>03</span><strong>데이터 대시보드</strong></a>
+      <span class="step-rail"></span>
+      <a href="#step-operations"><span>04</span><strong>운영 센터</strong></a>
     </nav>
     <section id="heroCarousel" class="hero hero-carousel" aria-roledescription="carousel" aria-label="앱 주요 기능">
       <div class="hero-stage" aria-live="off">
@@ -138,6 +140,23 @@
           </div>
         </div>
         <div id="dashboardResults" class="clean-results hidden"></div>
+      </div>
+    </section>
+
+    <section id="step-operations" class="workspace operations-workspace" aria-labelledby="operations-title">
+      <div class="section-index">04</div>
+      <div class="setup">
+        <div class="section-heading">
+          <div><p class="kicker">RELIABLE AUTOMATION</p><h2 id="operations-title">운영 센터</h2></div>
+          <p>중단된 작업을 이어받고 수집부터 대시보드까지 한 번에 실행합니다.</p>
+        </div>
+        <div class="operations-grid">
+          <article class="operation-card"><span>01</span><h3>이어받기·실패 재시도</h3><p id="resumeSummary">저장된 체크포인트가 없습니다.</p><button id="resumeButton" type="button" disabled>중단 지점부터 계속</button></article>
+          <article class="operation-card"><span>02</span><h3>데이터 품질 검사</h3><p id="qualitySummary">정제 실행 후 성공률과 오류 파일을 표시합니다.</p><div id="qualityMeter" class="quality-meter"><i style="width:0%"></i></div></article>
+          <article class="operation-card featured"><span>03</span><h3>원클릭 전체 파이프라인</h3><p>선택한 한 폴더에서 다운로드 → 정제 → 대시보드 생성을 순서대로 실행합니다.</p><button id="pipelineButton" type="button">전체 작업 시작</button></article>
+        </div>
+        <div class="history-head"><div><p class="panel-label">최근 작업 이력</p><small>이 브라우저에 최근 30건을 저장합니다.</small></div><button id="clearHistoryButton" type="button">이력 지우기</button></div>
+        <div id="operationHistory" class="operation-history"><p class="empty-history">아직 실행한 작업이 없습니다.</p></div>
       </div>
     </section>
 
