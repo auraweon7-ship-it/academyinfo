@@ -599,7 +599,9 @@ const server = http.createServer(async (req, res) => {
       return json(res, 200, result);
     }
     if (req.method !== 'GET') return json(res, 404, { error: '찾을 수 없습니다.' });
-    const pathname = url.pathname === '/' ? '/index.html' : url.pathname;
+    let pathname;
+    try { pathname = decodeURIComponent(url.pathname === '/' ? '/index.html' : url.pathname); }
+    catch { return json(res, 400, { error: '올바르지 않은 파일 경로입니다.' }); }
     const safePath = normalize(pathname).replace(/^(\.\.[/\\])+/, '');
     const filePath = join(ROOT, safePath);
     if (!filePath.startsWith(ROOT)) return json(res, 403, { error: '허용되지 않은 경로입니다.' });

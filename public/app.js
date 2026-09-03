@@ -27,7 +27,7 @@ function updateResumeUi() {
 }
 function initializeExampleLinks(){
   const base=location.protocol==='file:'||location.hostname.endsWith('github.io')?'./public/examples/':'./examples/';
-  $$('[data-example-file]').forEach(link=>{link.href=base+encodeURIComponent(link.dataset.exampleFile);});
+  $$('[data-example-file]').forEach(link=>{link.href=new URL(base+encodeURIComponent(link.dataset.exampleFile),location.href).href;});
 }
 const LOCAL_FOLDER_APIS = new Set(['/api/select-folder', '/api/save-files', '/api/select-clean-folder', '/api/clean-folder', '/api/select-dashboard-folder', '/api/list-dashboard-files', '/api/create-dashboards', '/api/cancel-operation']);
 const apiUrl = (path) => {
